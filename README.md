@@ -1,6 +1,29 @@
 # Chkoba / شكوبة
 
-A multiplayer browser implementation of **Chkoba** (شكوبة), the popular Tunisian card game. Built with PeerJS for peer-to-peer multiplayer — no server required. Deployable to any static host (Netlify, Vercel, GitHub Pages).
+A multiplayer browser implementation of **Chkoba** (شكوبة), the popular Tunisian card game. Built with Firebase Realtime Database for real-time multiplayer across any network. Deployable to any static host (Netlify, Vercel, GitHub Pages).
+
+## Quick Start
+
+### 1. Deploy to Netlify
+
+1. Push this repo to GitHub
+2. Go to [Netlify](https://app.netlify.com/) → **Add new site** → **Import an existing project**
+3. Connect your GitHub repo — **no build step required**
+
+### 2. Set up Firebase
+
+1. Go to [Firebase Console](https://console.firebase.google.com/) and create a new project
+2. Add a **Realtime Database** (choose "Start in test mode")
+3. Go to **Project Settings** → **General** → **Your apps** → **Add app** → **Web**
+4. Copy the `firebaseConfig` object
+5. Open `firebase-config.js` in this project and paste your config
+
+### 3. Play
+
+1. Open your Netlify URL
+2. Click **Create Game**
+3. Share the generated link with friends — they open it and click **Join Game**
+4. That's it — works across any network, no extra setup needed
 
 ## How to Play
 
@@ -28,83 +51,19 @@ A multiplayer browser implementation of **Chkoba** (شكوبة), the popular Tun
 - When placing a card, you can double-click it to auto-place (if no capture is required).
 - Use the **Debug Mode** (toggle in main menu or press backtick `` ` ``) to see all players' hands, inspect the deck, and manipulate the game for testing.
 
-## Setup
-
-### Deploy to Netlify
-
-1. Push this repo to GitHub
-2. Go to [Netlify](https://app.netlify.com/) → **Add new site** → **Import an existing project**
-3. Connect your GitHub repo
-4. **No build step required** — Netlify auto-detects static files
-5. Click **Deploy**
-
-Your game will be live at a `*.netlify.app` URL.
-
-### Play Across the Internet
-
-By default, **PeerJS** uses a free cloud signaling broker to connect players. This works on LAN but often fails across different networks (NAT, firewalls, etc.).
-
-To make it work reliably over the internet, you need your own **PeerJS signaling server** deployed on a free cloud platform.
-
-#### Step 1: Deploy the PeerJS Signaling Server on Render
-
-1. Go to [Render](https://render.com/) and create a free account
-2. Click **New +** → **Web Service**
-3. Connect your GitHub account and select a new repo
-4. Use these settings:
-   - **Name:** `chkoba-signal`
-   - **Runtime:** `Node`
-   - **Build Command:** `npm install peer`
-   - **Start Command:** `npx peerjs --port 10000 --path /peerjs --key peerjs`
-   - **Plan:** Free
-5. Click **Create Web Service**
-
-After deployment (a few minutes), you'll get a URL like `https://chkoba-signal.onrender.com`.
-
-#### Step 2: Configure the Game to Use Your Server
-
-Now open your Netlify game URL with these query parameters:
-
-```
-https://yourgame.netlify.app/?host=chkoba-signal.onrender.com&port=10000&path=/peerjs&key=peerjs
-```
-
-Refresh the page, create a game, and share the generated link with friends. The link will automatically include the signaling server configuration so all players connect through your server.
-
-> **Note:** Render's free tier spins down after inactivity (first request may take 30-60s to wake up).
-
-### URL Parameters Reference
-
-| Param | Default | Description |
-|-------|---------|-------------|
-| `room` | — | Room code to join |
-| `host` | `0.peerjs.com` | Custom PeerJS signaling server hostname |
-| `port` | `9000` | Signaling server port |
-| `path` | `/peerjs` | Signaling server path |
-| `key` | `peerjs` | Signaling server API key |
-| `secure` | `1` | Use HTTPS (`0` for HTTP) |
-| `turn` | — | TURN server URL (e.g. `turn:server.com:3478`) |
-| `turn_user` | — | TURN server username |
-| `turn_cred` | — | TURN server credential |
-
 ### Run Locally
 
-Just open `index.html` in your browser:
-
-```
-open index.html
-```
-
-No build tools, no server, no dependencies.
+Just open `index.html` in your browser. No build tools, no server, no dependencies.
 
 ## Architecture
 
 ```
 chkoba/
-├── index.html       # Single-page app: lobby, game board, modals
-├── style.css        # All styling (responsive, card game layout)
-├── game.js          # Game logic + P2P networking (PeerJS)
-├── images/          # 40 PNG card images
+├── index.html          # Single-page app: lobby, game board, modals
+├── style.css           # All styling (responsive, card game layout)
+├── game.js             # Game logic + Firebase real-time networking
+├── firebase-config.js  # Your Firebase project configuration
+├── images/             # 40 PNG card images
 │   ├── ace_of_hearts.png
 │   ├── 2_of_diamonds.png
 │   ├── jack_of_spades2.png     # Face cards use "2" suffix
@@ -115,9 +74,10 @@ chkoba/
 
 ### Key Design Decisions
 
-- **PeerJS** over Socket.IO — the app is deployed to static hosting (no Node server). PeerJS handles P2P signaling via a shared broker server.
+- **Firebase Realtime Database** over WebRTC/PeerJS — no NAT issues, no signaling servers to deploy, works across any network. Firebase handles real-time sync via WebSockets with automatic reconnection.
 - **Link-based joining** — no room code input on the page. The host shares a URL with `?room=XXXX`, players open it and click "Join Game".
-- **Personalized state** — each player only receives their own hand in the state packet. The host has full state locally.
+- **Host-authoritative state** — the host runs the game logic (deal, turns, capture validation, scoring). Player moves are written to Firebase, the host processes them and writes the updated state back.
+- **Private hands** — each player's hand is stored in a separate Firebase path (`hand_0`, `hand_1`, etc.). Players only read their own hand path.
 - **40-card rounds, cumulative scoring** — multiple 40-card rounds are played until a team reaches the win threshold. The deck is reshuffled each full cycle.
 
 ### Card Images
@@ -144,7 +104,7 @@ The debug panel is draggable — grab the gold header bar to move it.
 |-------|-----------|
 | UI | Vanilla HTML + CSS |
 | Logic | Vanilla JavaScript |
-| Networking | [PeerJS 1.5](https://peerjs.com/) |
+| Database | [Firebase Realtime Database](https://firebase.google.com/products/realtime-database) |
 | Hosting | Any static host (Netlify, Vercel, etc.) |
 
 ## License

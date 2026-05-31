@@ -89,10 +89,7 @@ const app = {
   winScore: 21,
   turnTimerDuration: 30,
   myName: '',
-  peer: null,
-  connsToMe: [],
   playerList: [],
-  myConn: null,
   gameState: null,
   myHand: [],
   selectedCardIndex: -1,
@@ -114,11 +111,25 @@ const app = {
   _lastCardClickIndex: -1,
   _lastCardClickTime: 0,
   _lastTimerSec: 0,
+  _db: null,
+  _roomRef: null,
+  _stateRef: null,
+  _movesRef: null,
+  _playerListeners: [],
+  _moveCallback: null,
+  _roomStarted: false,
 
   // ========== ROOM MANAGEMENT ==========
   init() {
     this.soundsEnabled = localStorage.getItem('chkoba_sounds') !== 'false';
     this.animationsEnabled = localStorage.getItem('chkoba_animations') !== 'false';
+
+    try {
+      firebase.initializeApp(firebaseConfig);
+      this._db = firebase.database();
+    } catch (e) {
+      console.error('Firebase init error:', e);
+    }
 
     const params = new URLSearchParams(window.location.search);
     const code = params.get('room');
@@ -136,38 +147,6 @@ const app = {
         if (this.controlsOpen) this.toggleControls();
       }
     });
-  },
-
-  getPeerOptions() {
-    const params = new URLSearchParams(window.location.search);
-    const opts = {
-      debug: 0,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ],
-      },
-    };
-    if (params.get('host')) {
-      opts.host = params.get('host');
-      opts.port = parseInt(params.get('port')) || 9000;
-      opts.path = params.get('path') || '/peerjs';
-      opts.key = params.get('key') || 'peerjs';
-      if (params.get('secure') === '0') opts.secure = false;
-      else opts.secure = true;
-    }
-    if (params.get('turn')) {
-      const turnUrl = params.get('turn');
-      const turnUser = params.get('turn_user') || '';
-      const turnCred = params.get('turn_cred') || '';
-      opts.config.iceServers.push({
-        urls: turnUrl,
-        username: turnUser,
-        credential: turnCred,
-      });
-    }
-    return opts;
   },
 
   showJoinView(roomCode) {
@@ -194,45 +173,58 @@ const app = {
 
     // Generate code and show waiting room IMMEDIATELY
     this.roomCode = genRoomCode();
-    const baseUrl = window.location.href.split('?')[0];
-    const currentParams = new URLSearchParams(window.location.search);
-    currentParams.delete('room');
-    currentParams.set('room', this.roomCode);
-    this.roomLink = baseUrl + '?' + currentParams.toString();
     this.myPlayerId = 0;
     this.playerList = [this.myName];
-    this.connsToMe = [];
     this.moveLog = [];
-    this.showWaiting();
 
-    // Then connect PeerJS in background
-    const peerOpts = this.getPeerOptions();
-    try {
-      this.peer = new Peer(this.roomCode, peerOpts);
-      this.peer.on('open', () => {
-        this.toast('Room ready!');
-      });
-      this.peer.on('connection', (conn) => this.handleConnection(conn));
-      this.peer.on('error', (err) => {
-        if (err.type === 'unavailable-id') {
-          this.roomCode = genRoomCode();
-          this.roomLink = window.location.href.split('?')[0] + '?room=' + this.roomCode;
-          document.getElementById('room-link-display').textContent = this.roomLink;
-          if (this.peer) { try { this.peer.destroy(); } catch(e) {} }
-          this.peer = new Peer(this.roomCode, peerOpts);
-          this.peer.on('open', () => this.toast('Room ready!'));
-          this.peer.on('connection', (conn) => this.handleConnection(conn));
-          this.peer.on('error', (e) => this.toast('Peer error: ' + e.message));
-        } else if (err.type === 'disconnected') {
-          this.toast('Reconnecting...');
-          this.peer.reconnect();
-        } else {
-          this.toast('PeerJS: ' + (err.message || err.type));
+    // Create room in Firebase
+    this._roomRef = this._db.ref('rooms/' + this.roomCode);
+    this._roomRef.set({
+      host: this.myName,
+      playerCount: this.playerCount,
+      forceCapture: this.forceCapture,
+      winScore: this.winScore,
+      turnTimerDuration: this.turnTimerDuration,
+      players: { 0: this.myName },
+      started: false,
+    }).then(() => {
+      const baseUrl = window.location.href.split('?')[0];
+      const currentParams = new URLSearchParams(window.location.search);
+      currentParams.delete('room');
+      currentParams.set('room', this.roomCode);
+      this.roomLink = baseUrl + '?' + currentParams.toString();
+      this.toast('Room ready!');
+
+      // Listen for player joins
+      const playersRef = this._roomRef.child('players');
+      playersRef.on('value', (snap) => {
+        const players = snap.val() || {};
+        this.playerList = [];
+        for (let i = 0; i < this.playerCount; i++) {
+          if (players[i]) this.playerList.push(players[i]);
         }
+        if (this.playerList.length > 0 && this.playerList[0] !== this.myName) {
+          this.playerList.unshift(this.myName);
+        }
+        this.renderWaiting();
       });
-    } catch (e) {
-      this.toast('Could not connect to signaling server. Share code: ' + this.roomCode);
-    }
+      this._playerListeners.push(playersRef);
+
+      // Listen for moves
+      this._movesRef = this._roomRef.child('moves');
+      this._moveCallback = (snap) => {
+        const move = snap.val();
+        if (!move || move.playerId === undefined) return;
+        snap.ref.remove();
+        this.handlePlay(move);
+      };
+      this._movesRef.orderByChild('ts').on('child_added', this._moveCallback);
+      this._playerListeners.push(this._movesRef);
+
+      this.showWaiting();
+    }).catch((err) => {
+      this.toast('Could not create room: ' + err.message);
+    });
   },
 
   joinGame() {
@@ -242,80 +234,63 @@ const app = {
     this.isHost = false;
     this.moveLog = [];
 
-    this.toast('Connecting to room ' + this.roomCode + '...');
-    const peerOpts = this.getPeerOptions();
-    this.peer = new Peer(undefined, peerOpts);
-    this.peer.on('open', () => {
-      const conn = this.peer.connect(this.roomCode, { reliable: true });
-      const timeout = setTimeout(() => this.toast('Connection timed out. Check the room code.'), 10000);
-      conn.on('open', () => {
-        clearTimeout(timeout);
-        this.myConn = conn;
-        conn.send({ type: 'join', name: this.myName });
-        this.setupListeners(conn);
-      });
-      conn.on('error', (err) => this.toast('Connection error'));
-    });
-    this.peer.on('error', (err) => {
-      if (err.type === 'disconnected') {
-        this.peer.reconnect();
-      } else {
-        this.toast('Could not connect: ' + (err.message || err.type));
-      }
-    });
-  },
+    this._roomRef = this._db.ref('rooms/' + this.roomCode);
 
-  handleConnection(conn) {
-    const idx = this.connsToMe.length;
-    conn.playerIndex = idx;
-    conn.on('data', (data) => {
-      if (data.type === 'join') {
-        conn.metadata = { name: data.name };
-        if (!this.playerList) this.playerList = [this.myName];
-        this.playerList[idx + 1] = data.name;
-        this.connsToMe[idx] = conn;
-        conn.send({ type: 'assign', playerId: idx + 1 });
-        this.renderWaiting();
-      } else if (data.type === 'play') {
-        data.playerId = conn.playerIndex + 1;
-        this.handlePlay(data);
+    this._roomRef.once('value').then((snap) => {
+      const room = snap.val();
+      if (!room || !room.host) {
+        this.toast('Room not found!');
+        return;
       }
-    });
-    conn.on('close', () => {
-      if (this.gameState && this.gameState.phase === 'playing') {
-        this.toast('A player disconnected — game ended');
-        this.linkDead();
-      } else {
-        this.toast('A player left');
-        this.connsToMe[conn.playerIndex] = null;
-        this.renderWaiting();
-      }
-    });
-  },
 
-  setupListeners(conn) {
-    conn.on('data', (data) => {
-      if (data.type === 'state') {
-        this.handleStateUpdate(data);
-      } else if (data.type === 'error') {
-        this.toast(data.message);
-      } else if (data.type === 'assign') {
-        this.myPlayerId = data.playerId;
+      const players = room.players || {};
+      let myId = -1;
+      for (let i = 0; i < (room.playerCount || 4); i++) {
+        if (!players[i]) { myId = i; break; }
+      }
+      if (myId < 0) { this.toast('Room is full!'); return; }
+
+      this.myPlayerId = myId;
+      this._roomRef.child('players/' + myId).set(this.myName).then(() => {
+        this.toast('Joined room!');
+
+        // Listen for game state
+        const stateRef = this._roomRef.child('state');
+        stateRef.on('value', (snap) => {
+          const state = snap.val();
+          if (state) this.handleStateUpdate(state);
+        });
+        this._playerListeners.push(stateRef);
+
+        // Listen for my hand
+        const handRef = this._roomRef.child('hand_' + myId);
+        handRef.on('value', (snap) => {
+          const cards = snap.val();
+          this.myHand = cards || [];
+        });
+        this._playerListeners.push(handRef);
+
+        // Listen for move log
+        const logRef = this._roomRef.child('log');
+        logRef.on('value', (snap) => {
+          const log = snap.val();
+          if (log) this.moveLog = log.slice(-50);
+        });
+        this._playerListeners.push(logRef);
+
+        // Listen for room deletion (host left)
+        this._roomRef.on('value', (snap) => {
+          if (!snap.val() && this.gameState) {
+            this.toast('The link is dead');
+            this.backToLobby();
+          }
+        });
+        this._playerListeners.push(this._roomRef);
+
         this.showPlayerConnected();
-      } else if (data.type === 'leave') {
-        this.toast(data.message);
-        this.backToLobby();
-      } else if (data.type === 'log') {
-        if (data.entries) this.moveLog = data.entries;
-      }
-    });
-    conn.on('close', () => {
-      if (this.gameState) {
-        this.toast('Disconnected from host');
-      } else {
-        this.toast('The link is dead');
-      }
-      this.backToLobby();
+      });
+    }).catch((err) => {
+      this.toast('Could not join: ' + err.message);
     });
   },
 
@@ -335,8 +310,7 @@ const app = {
 
   renderWaiting() {
     const list = document.getElementById('waiting-players');
-    const players = this.getConnectedPlayers();
-    if (!players || players.length === 0) return;
+    const players = this.playerList || [];
     list.innerHTML = players.map((name, i) => {
       const dotClass = this.playerCount === 4 ? (i % 2 === 0 ? 'team1' : 'team2') : '';
       return `<div class="player-chip"><span class="dot ${dotClass}"></span>${escapeHtml(name)} ${i === 0 ? '(Host)' : ''}</div>`;
@@ -344,20 +318,11 @@ const app = {
 
     const btn = document.getElementById('start-game-btn');
     if (this.isHost) {
-      const ready = players.length >= this.playerCount;
+      const ready = players.length >= this.playerCount && !this._roomStarted;
       btn.classList.toggle('hidden', !ready);
-      btn.textContent = ready ? 'Start Game' : 'Waiting for players...';
+      btn.textContent = ready ? 'Start Game' : players.length >= this.playerCount ? 'Starting...' : 'Waiting for players...';
       if (!ready) btn.disabled = true; else btn.disabled = false;
     }
-  },
-
-  getConnectedPlayers() {
-    if (!this.isHost) return [];
-    const names = [this.myName];
-    for (let i = 0; i < this.connsToMe.length; i++) {
-      if (this.connsToMe[i]) names.push(this.playerList[i + 1] || 'Player ' + (i + 2));
-    }
-    return names.filter(Boolean);
   },
 
   copyRoomLink() {
@@ -369,61 +334,58 @@ const app = {
   },
 
   leaveRoom() {
-    // Notify all connected players the link is dead
-    for (let i = 0; i < this.connsToMe.length; i++) {
-      if (this.connsToMe[i]) {
-        try { this.connsToMe[i].send({ type: 'leave', message: 'The link is dead' }); } catch(e) {}
-      }
+    this.cleanupListeners();
+    if (this.isHost && this._roomRef) {
+      this._roomRef.remove().catch(() => {});
     }
-    if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
-    this.connsToMe = [];
-    this.myConn = null;
+    this._roomRef = null;
+    this._stateRef = null;
+    this._movesRef = null;
     this.gameState = null;
     this.myHand = [];
+    this.playerList = [];
     this.stopTurnTimer();
     this.showLobby();
   },
 
-  linkDead() {
-    for (let i = 0; i < this.connsToMe.length; i++) {
-      if (this.connsToMe[i]) {
-        try { this.connsToMe[i].send({ type: 'leave', message: 'The link is dead' }); } catch(e) {}
-      }
-    }
-    this.backToLobby();
-  },
-
   backToLobby() {
-    if (this.peer) { try { this.peer.destroy(); } catch(e) {} this.peer = null; }
-    this.connsToMe = [];
-    this.myConn = null;
+    this.cleanupListeners();
+    if (this.isHost && this._roomRef) {
+      this._roomRef.remove().catch(() => {});
+    }
+    this._roomRef = null;
+    this._stateRef = null;
+    this._movesRef = null;
     this.gameState = null;
     this.myHand = [];
     this.selectedCardIndex = -1;
     this.selectedCaptureIndices = [];
     this.availableCaptures = [];
     this.moveLog = [];
+    this.playerList = [];
     this.stopTurnTimer();
     const modal = document.getElementById('score-modal');
     if (modal) modal.classList.add('hidden');
     this.showLobby();
   },
 
+  cleanupListeners() {
+    this._playerListeners.forEach(ref => {
+      if (ref) ref.off();
+    });
+    this._playerListeners = [];
+    this._moveCallback = null;
+  },
+
   // ========== START GAME ==========
   startGame() {
     if (!this.isHost) return;
 
-    // Filter active connections to avoid empty slot mismatches
-    this.connsToMe = this.connsToMe.filter(Boolean);
-    const players = [this.myName];
-    this.connsToMe.forEach((conn, idx) => {
-      conn.playerIndex = idx;
-      conn.send({ type: 'assign', playerId: idx + 1 });
-      players.push(conn.metadata?.name || this.playerList[idx + 1] || 'Player ' + (idx + 2));
-    });
-
+    const players = this.playerList || [];
     const numPlayers = this.playerCount;
     if (players.length < numPlayers) { this.toast('Not enough players'); return; }
+
+    this._roomStarted = true;
 
     const totalPlayerCards = numPlayers * 3;
     const remainingRounds = Math.ceil((40 - 4 - totalPlayerCards) / totalPlayerCards);
@@ -617,13 +579,13 @@ const app = {
   handlePlay(data) {
     if (!this.isHost) return;
     const gs = this.gameState, playerId = data.playerId;
-    if (playerId !== gs.currentTurn) { this.sendToPlayer(playerId, { type: 'error', message: 'Not your turn!' }); return; }
+    if (playerId !== gs.currentTurn) { return; }
 
     this.stopTurnTimer();
 
     const hand = gs.hands[playerId];
     const cardIndex = hand.findIndex(c => c.id === data.cardId);
-    if (cardIndex === -1) { this.sendToPlayer(playerId, { type: 'error', message: 'Card not found!' }); return; }
+    if (cardIndex === -1) { return; }
 
     const playedCard = hand[cardIndex];
     const captureIds = data.captureCardIds || [];
@@ -632,11 +594,11 @@ const app = {
 
     if (captureIds.length > 0) {
       const capIndices = captureIds.map(id => gs.tableCards.findIndex(c => c.id === id));
-      if (capIndices.includes(-1)) { this.sendToPlayer(playerId, { type: 'error', message: 'Invalid capture!' }); return; }
+      if (capIndices.includes(-1)) { return; }
       const sum = capIndices.reduce((s, idx) => s + gs.tableCards[idx].value, 0);
-      if (sum !== playedCard.value) { this.sendToPlayer(playerId, { type: 'error', message: 'Cards must sum to ' + playedCard.value }); return; }
+      if (sum !== playedCard.value) { return; }
     } else if (gs.forceCapture && hasValidCapture && gs.tableCards.length > 0) {
-      this.sendToPlayer(playerId, { type: 'error', message: 'You must capture when possible!' }); return;
+      return;
     }
 
     hand.splice(cardIndex, 1);
@@ -782,22 +744,31 @@ const app = {
 
   // ========== NETWORKING ==========
   broadcastGameState() {
-    if (!this.isHost || !this.gameState) return;
-    for (let i = 0; i < this.gameState.numPlayers; i++) {
-      if (i === 0) continue; // Host already has full state, just render
-      this.sendToPlayer(i, { type: 'state', ...this.buildPlayerState(i) });
-      // Send move log too
-      this.sendToPlayer(i, { type: 'log', entries: this.moveLog.slice(-50) });
+    if (!this.isHost || !this.gameState || !this._roomRef) return;
+    const gs = this.gameState;
+
+    // Write public state
+    this._roomRef.child('state').set(this.buildPublicState());
+
+    // Write each player's hand
+    for (let i = 0; i < gs.numPlayers; i++) {
+      this._roomRef.child('hand_' + i).set(gs.hands[i] || []);
     }
+
+    // Write move log
+    this._roomRef.child('log').set(this.moveLog.slice(-50));
+
+    // Update host's local hand
+    this.myHand = gs.hands[0] || [];
     this.renderGame();
   },
 
-  buildPlayerState(playerId) {
+  buildPublicState() {
     const gs = this.gameState;
     return {
-      phase: gs.phase, yourId: playerId,
+      yourId: this.myPlayerId,
+      phase: gs.phase, numPlayers: gs.numPlayers,
       players: gs.players.map(p => ({ id: p.id, name: p.name, team: p.team })),
-      hand: gs.hands[playerId] ? [...gs.hands[playerId]] : [],
       tableCards: [...gs.tableCards], deckCount: gs.deck.length,
       currentTurn: gs.currentTurn, dealerIndex: gs.dealerIndex,
       roundNum: gs.roundNum, totalRounds: gs.totalRounds,
@@ -809,7 +780,6 @@ const app = {
       winner: gs.winner !== undefined ? gs.winner : -1,
       turnTimerDuration: gs.turnTimerDuration || 0,
       nextDealerTurn: gs.nextDealerTurn !== undefined ? gs.nextDealerTurn : -1,
-      // Send diamond ownership info for tracker
       diamondOwnership: this.getDiamondOwnership(),
     };
   },
@@ -828,39 +798,30 @@ const app = {
     return ownership;
   },
 
-  sendToPlayer(playerIndex, message) {
-    if (!this.isHost) return;
-    if (playerIndex === 0) {
-      if (message.type === 'state') {
-        this.myPlayerId = 0;
-        this.myHand = this.gameState.hands[0] || [];
-      }
-      return;
-    }
-    const conn = this.connsToMe[playerIndex - 1];
-    if (conn) { try { conn.send(message); } catch(e) {} }
-  },
-
   // ========== PLAYER STATE HANDLER ==========
   handleStateUpdate(data) {
-    this.myPlayerId = data.yourId;
-    this.myHand = data.hand || [];
-    this.playerCount = data.players.length;
-
     const oldState = this.gameState;
-    const oldHandLength = (oldState && oldState.hand) ? oldState.hand.length : 0;
+    const oldHandLength = this.myHand ? this.myHand.length : 0;
 
     this.gameState = {
-      phase: data.phase, numPlayers: data.players.length,
-      players: data.players, tableCards: data.tableCards || [],
-      deckCount: data.deckCount, currentTurn: data.currentTurn,
-      dealerIndex: data.dealerIndex, roundNum: data.roundNum,
-      totalRounds: data.totalRounds, lastCaptureTeam: data.lastCaptureTeam,
-      shkobbaCount: data.shkobbaCount, capturedCounts: data.capturedCounts,
-      scores: data.scores, forceCapture: data.forceCapture, winScore: data.winScore,
-      cardsPlayedThisRound: data.cardsPlayedThisRound,
-      lastScore: data.lastScore, shkobbaThisTurn: data.shkobbaThisTurn,
-      winner: data.winner,
+      phase: data.phase, numPlayers: data.numPlayers || 4,
+      players: data.players || [],
+      tableCards: data.tableCards || [],
+      deckCount: data.deckCount || 0,
+      currentTurn: data.currentTurn,
+      dealerIndex: data.dealerIndex,
+      roundNum: data.roundNum,
+      totalRounds: data.totalRounds,
+      lastCaptureTeam: data.lastCaptureTeam,
+      shkobbaCount: data.shkobbaCount || [0, 0],
+      capturedCounts: data.capturedCounts || [0, 0],
+      scores: data.scores || [0, 0],
+      forceCapture: data.forceCapture !== undefined ? data.forceCapture : true,
+      winScore: data.winScore || 21,
+      cardsPlayedThisRound: data.cardsPlayedThisRound || [],
+      lastScore: data.lastScore || null,
+      shkobbaThisTurn: data.shkobbaThisTurn || false,
+      winner: data.winner !== undefined ? data.winner : -1,
       turnTimerDuration: data.turnTimerDuration || 0,
       nextDealerTurn: data.nextDealerTurn !== -1 ? data.nextDealerTurn : undefined,
       diamondOwnership: data.diamondOwnership || {},
@@ -870,29 +831,17 @@ const app = {
     this.selectedCaptureIndices = [];
     this.availableCaptures = [];
 
-    // Trigger deal animation when hand count increases from 0 or round transitions
-    if (data.hand && data.hand.length > 0 && (oldHandLength === 0 || (oldState && oldState.roundNum !== data.roundNum))) {
+    // Trigger deal animation when hand count changes
+    if (this.myHand && this.myHand.length > 0 && (oldHandLength === 0 || (oldState && oldState.roundNum !== data.roundNum))) {
       this.animateDeal = true;
     }
 
-    // Play synthesised sounds based on state transitions on client
+    // Play sounds based on state transitions
     if (oldState && oldState.phase === 'playing') {
       if (data.phase === 'finished') {
         this.playSound('win');
       } else if (data.shkobbaThisTurn) {
         this.playSound('shkobba');
-      } else {
-        const oldCapSum = (oldState.capturedCounts || [0, 0]).reduce((a, b) => a + b, 0);
-        const newCapSum = (data.capturedCounts || [0, 0]).reduce((a, b) => a + b, 0);
-        if (newCapSum > oldCapSum) {
-          this.playSound('capture');
-        } else {
-          const oldTableCount = (oldState.tableCards || []).length;
-          const newTableCount = (data.tableCards || []).length;
-          if (newTableCount !== oldTableCount) {
-            this.playSound('place');
-          }
-        }
       }
     }
 
@@ -902,9 +851,7 @@ const app = {
     } else {
       const modal = document.getElementById('score-modal');
       if (modal) modal.classList.add('hidden');
-
       this.renderGame();
-      // Non-host also shows timer
       if (data.phase === 'playing' && data.currentTurn >= 0) {
         this.startTurnTimer();
       }
@@ -1002,8 +949,13 @@ const app = {
     const executeSend = () => {
       if (this.isHost) {
         this.handlePlay({ playerId: this.myPlayerId, cardId, captureCardIds });
-      } else if (this.myConn) {
-        this.myConn.send({ type: 'play', cardId, captureCardIds });
+      } else if (this._roomRef) {
+        this._roomRef.child('moves').push({
+          playerId: this.myPlayerId,
+          cardId,
+          captureCardIds,
+          ts: Date.now(),
+        });
         this.cancelSelection();
       }
     };
