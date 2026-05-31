@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chkoba — Tunisian Card Game</title>
+  <meta name="description" content="Play Chkoba, the beloved Tunisian card game, online with friends. Features real-time multiplayer, beautiful design, and authentic rules.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🃏</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- ============ LOBBY ============ -->
+    <div id="lobby-view" class="view active">
+      <div class="lobby-container">
+        <h1 class="game-title">Chkoba</h1>
+        <p class="subtitle">Tunisian Card Game</p>
+
+        <input type="text" id="player-name" class="input" placeholder="Your Name" maxlength="20">
+
+        <div class="settings-row">
+          <div class="select-group">
+            <label>Players</label>
+            <select id="player-count" class="select">
+              <option value="2" selected>2</option>
+              <option value="4">4</option>
+            </select>
+          </div>
+          <div class="select-group">
+            <label>Win</label>
+            <select id="win-score" class="select">
+              <option value="11">11</option>
+              <option value="21" selected>21</option>
+            </select>
+          </div>
+          <div class="select-group">
+            <label>Timer</label>
+            <select id="turn-timer" class="select">
+              <option value="0">Off</option>
+              <option value="15">15s</option>
+              <option value="30" selected>30s</option>
+              <option value="45">45s</option>
+              <option value="60">60s</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="toggle-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="force-capture" checked>
+            <span>Force capture when possible</span>
+          </label>
+        </div>
+
+        <div class="toggle-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="debug-toggle" onchange="app.toggleDebug()">
+            <span style="color:var(--gold);">Debug Mode</span>
+          </label>
+        </div>
+
+        <button class="btn btn-primary btn-big" onclick="app.createGame()">Create Game</button>
+      </div>
+    </div>
+
+    <!-- ============ JOIN ============ -->
+    <div id="join-view" class="view">
+      <div class="lobby-container">
+        <h1 class="game-title">Chkoba</h1>
+        <p class="subtitle">You've been invited to join!</p>
+
+        <div class="join-room-badge">Room: <strong id="join-room-code"></strong></div>
+
+        <input type="text" id="join-name" class="input" placeholder="Your Name" maxlength="20">
+
+        <button class="btn btn-primary btn-big" onclick="app.joinGame()">Join Game</button>
+        <button class="btn btn-text" onclick="app.showLobby()" style="margin-top:0.75rem;">Back</button>
+      </div>
+    </div>
+
+    <!-- ============ WAITING ROOM (HOST) ============ -->
+    <div id="waiting-view" class="view">
+      <div class="waiting-container">
+        <h2>Waiting Room</h2>
+        <div class="room-info">
+          <p style="margin-bottom:0.3rem;">Share this link with players:</p>
+          <div class="room-code-box">
+            <span id="room-link-display" class="room-link-text"></span>
+          </div>
+          <button class="btn btn-small btn-secondary" onclick="app.copyRoomLink()" style="margin-top:0.5rem;">📋 Copy Link</button>
+        </div>
+        <div id="waiting-players" class="player-list"></div>
+        <button id="start-game-btn" class="btn btn-primary hidden" onclick="app.startGame()">Start Game</button>
+        <button class="btn btn-text" onclick="app.leaveRoom()">Leave</button>
+      </div>
+    </div>
+
+    <!-- ============ CONNECTED (PLAYER) ============ -->
+    <div id="connected-view" class="view">
+      <div class="waiting-container">
+        <h2>Connected!</h2>
+        <div class="room-info">
+          <p>Joined room: <strong id="connected-room"></strong></p>
+          <p style="color:var(--text-secondary);">Waiting for host to start the game...</p>
+          <div class="loading-spinner"></div>
+        </div>
+        <button class="btn btn-text" onclick="app.leaveRoom()">Leave</button>
+      </div>
+    </div>
+
+    <!-- ============ GAME VIEW ============ -->
+    <div id="game-view" class="view">
+      <div id="game-header">
+        <div class="header-left">
+          <span class="room-badge" id="game-room-code"></span>
+          <span id="timer-text"></span>
+        </div>
+        <div class="header-center">
+          <span class="game-info">Round <span id="round-num">0</span>/<span id="round-total">0</span></span>
+          <span class="game-info" id="deck-display">Deck: 0</span>
+          <span class="game-info" id="turn-display">Turn: --</span>
+        </div>
+        <div class="header-right">
+          <span class="score-badge" id="score-t1">Team 1: 0</span>
+          <span class="score-badge" id="score-t2">Team 2: 0</span>
+          <button class="header-btn" id="btn-controls" onclick="app.toggleControls()" title="Game Menu">⚙</button>
+        </div>
+      </div>
+
+      <div id="timer-bar-container">
+        <div id="timer-bar"></div>
+      </div>
+
+      <div id="game-board">
+        <div id="opponents-top" class="opponents-row"></div>
+
+        <div id="play-area">
+          <div id="opponent-left" class="opponent-side"></div>
+
+          <div id="table-area">
+            <div id="table-deck" class="deck-pile"></div>
+            <div class="table-center">
+              <div id="table-cards" class="card-row"></div>
+              <div id="table-msg" class="table-message"></div>
+              <div id="capture-hint" class="capture-hint hidden"></div>
+              <div id="shkobba-announce" class="shkobba-announce hidden">Shkobba! +1</div>
+            </div>
+          </div>
+
+          <div id="opponent-right" class="opponent-side"></div>
+        </div>
+
+        <div id="hand-area">
+          <div id="player-label" class="player-label"></div>
+          <div id="my-captured" class="my-captured hidden"></div>
+          <div id="hand-cards" class="card-row"></div>
+          <div id="hand-actions" class="hand-actions hidden">
+            <button id="btn-place" class="btn-action" onclick="app.placeCard()">Place</button>
+            <button id="btn-capture" class="btn-action btn-action-capture" onclick="app.confirmCapture()">Capture</button>
+            <button id="btn-cancel" class="btn-action btn-action-cancel" onclick="app.cancelSelection()">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Scoreboard Modal (Round End / Game Over) -->
+      <div id="score-modal" class="modal hidden">
+        <div class="modal-content">
+          <h2 id="score-title">Round Ended</h2>
+          <div id="score-details"></div>
+          <div class="modal-actions" id="score-modal-actions"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- ============ CONTROLS PANEL (Side Drawer) ============ -->
+  <div id="controls-panel">
+    <div class="controls-header">
+      <h3>⚙ Game Menu</h3>
+      <button class="controls-close" onclick="app.toggleControls()">✕</button>
+    </div>
+    <div class="controls-tabs">
+      <button class="controls-tab active" data-tab="stats" onclick="app.switchControlsTab('stats')">Stats</button>
+      <button class="controls-tab" data-tab="settings" onclick="app.switchControlsTab('settings')">Settings</button>
+      <button class="controls-tab" data-tab="log" onclick="app.switchControlsTab('log')">Log</button>
+      <button class="controls-tab" data-tab="actions" onclick="app.switchControlsTab('actions')">Actions</button>
+    </div>
+    <div class="controls-tab-content" id="controls-content">
+      <!-- Content filled by JS -->
+    </div>
+  </div>
+
+  <!-- ============ DEBUG PANEL ============ -->
+  <div id="debug-panel" class="debug-panel hidden">
+    <div class="debug-header">
+      <span>🔧 DEBUG MODE</span>
+      <button class="btn-debug-close" onclick="app.toggleDebug()">✕</button>
+    </div>
+    <div class="debug-tabs">
+      <button class="debug-tab active" data-tab="hands" onclick="app.switchDebugTab('hands')">Hands</button>
+      <button class="debug-tab" data-tab="table" onclick="app.switchDebugTab('table')">Table</button>
+      <button class="debug-tab" data-tab="deck" onclick="app.switchDebugTab('deck')">Deck</button>
+      <button class="debug-tab" data-tab="controls" onclick="app.switchDebugTab('controls')">Controls</button>
+    </div>
+    <div class="debug-body" id="debug-body">
+      <!-- Content filled by JS -->
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
