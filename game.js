@@ -267,6 +267,7 @@ const app = {
         handRef.on('value', (snap) => {
           const cards = snap.val();
           this.myHand = cards || [];
+          this.renderGame();
         });
         this._playerListeners.push(handRef);
 
@@ -747,16 +748,14 @@ const app = {
     if (!this.isHost || !this.gameState || !this._roomRef) return;
     const gs = this.gameState;
 
-    // Write public state
-    this._roomRef.child('state').set(this.buildPublicState());
-
-    // Write each player's hand
+    // Write public state, hands, and log atomically
+    const updates = {};
+    updates['state'] = this.buildPublicState();
     for (let i = 0; i < gs.numPlayers; i++) {
-      this._roomRef.child('hand_' + i).set(gs.hands[i] || []);
+      updates['hand_' + i] = gs.hands[i] || [];
     }
-
-    // Write move log
-    this._roomRef.child('log').set(this.moveLog.slice(-50));
+    updates['log'] = this.moveLog.slice(-50);
+    this._roomRef.update(updates);
 
     // Update host's local hand
     this.myHand = gs.hands[0] || [];
