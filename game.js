@@ -138,6 +138,38 @@ const app = {
     });
   },
 
+  getPeerOptions() {
+    const params = new URLSearchParams(window.location.search);
+    const opts = {
+      debug: 0,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+        ],
+      },
+    };
+    if (params.get('host')) {
+      opts.host = params.get('host');
+      opts.port = parseInt(params.get('port')) || 9000;
+      opts.path = params.get('path') || '/peerjs';
+      opts.key = params.get('key') || 'peerjs';
+      if (params.get('secure') === '0') opts.secure = false;
+      else opts.secure = true;
+    }
+    if (params.get('turn')) {
+      const turnUrl = params.get('turn');
+      const turnUser = params.get('turn_user') || '';
+      const turnCred = params.get('turn_cred') || '';
+      opts.config.iceServers.push({
+        urls: turnUrl,
+        username: turnUser,
+        credential: turnCred,
+      });
+    }
+    return opts;
+  },
+
   showJoinView(roomCode) {
     this.roomCode = roomCode;
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -162,7 +194,11 @@ const app = {
 
     // Generate code and show waiting room IMMEDIATELY
     this.roomCode = genRoomCode();
-    this.roomLink = window.location.href.split('?')[0] + '?room=' + this.roomCode;
+    const baseUrl = window.location.href.split('?')[0];
+    const currentParams = new URLSearchParams(window.location.search);
+    currentParams.delete('room');
+    currentParams.set('room', this.roomCode);
+    this.roomLink = baseUrl + '?' + currentParams.toString();
     this.myPlayerId = 0;
     this.playerList = [this.myName];
     this.connsToMe = [];
@@ -170,8 +206,9 @@ const app = {
     this.showWaiting();
 
     // Then connect PeerJS in background
+    const peerOpts = this.getPeerOptions();
     try {
-      this.peer = new Peer(this.roomCode, { debug: 0 });
+      this.peer = new Peer(this.roomCode, peerOpts);
       this.peer.on('open', () => {
         this.toast('Room ready!');
       });
@@ -182,7 +219,7 @@ const app = {
           this.roomLink = window.location.href.split('?')[0] + '?room=' + this.roomCode;
           document.getElementById('room-link-display').textContent = this.roomLink;
           if (this.peer) { try { this.peer.destroy(); } catch(e) {} }
-          this.peer = new Peer(this.roomCode, { debug: 0 });
+          this.peer = new Peer(this.roomCode, peerOpts);
           this.peer.on('open', () => this.toast('Room ready!'));
           this.peer.on('connection', (conn) => this.handleConnection(conn));
           this.peer.on('error', (e) => this.toast('Peer error: ' + e.message));
@@ -206,7 +243,8 @@ const app = {
     this.moveLog = [];
 
     this.toast('Connecting to room ' + this.roomCode + '...');
-    this.peer = new Peer(undefined, { debug: 0 });
+    const peerOpts = this.getPeerOptions();
+    this.peer = new Peer(undefined, peerOpts);
     this.peer.on('open', () => {
       const conn = this.peer.connect(this.roomCode, { reliable: true });
       const timeout = setTimeout(() => this.toast('Connection timed out. Check the room code.'), 10000);

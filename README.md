@@ -30,13 +30,62 @@ A multiplayer browser implementation of **Chkoba** (شكوبة), the popular Tun
 
 ## Setup
 
-### Play Immediately
+### Deploy to Netlify
 
-This is a static web app. Deploy it anywhere:
+1. Push this repo to GitHub
+2. Go to [Netlify](https://app.netlify.com/) → **Add new site** → **Import an existing project**
+3. Connect your GitHub repo
+4. **No build step required** — Netlify auto-detects static files
+5. Click **Deploy**
 
-1. Push to a GitHub repo
-2. Connect to **Netlify** (or Vercel, GitHub Pages) — no build step needed
-3. Open the URL and share the room link with friends
+Your game will be live at a `*.netlify.app` URL.
+
+### Play Across the Internet
+
+By default, **PeerJS** uses a free cloud signaling broker to connect players. This works on LAN but often fails across different networks (NAT, firewalls, etc.).
+
+To make it work reliably over the internet, you need your own **PeerJS signaling server** deployed on a free cloud platform.
+
+#### Step 1: Deploy the PeerJS Signaling Server on Render
+
+1. Go to [Render](https://render.com/) and create a free account
+2. Click **New +** → **Web Service**
+3. Connect your GitHub account and select a new repo
+4. Use these settings:
+   - **Name:** `chkoba-signal`
+   - **Runtime:** `Node`
+   - **Build Command:** `npm install peer`
+   - **Start Command:** `npx peerjs --port 10000 --path /peerjs --key peerjs`
+   - **Plan:** Free
+5. Click **Create Web Service**
+
+After deployment (a few minutes), you'll get a URL like `https://chkoba-signal.onrender.com`.
+
+#### Step 2: Configure the Game to Use Your Server
+
+Now open your Netlify game URL with these query parameters:
+
+```
+https://yourgame.netlify.app/?host=chkoba-signal.onrender.com&port=10000&path=/peerjs&key=peerjs
+```
+
+Refresh the page, create a game, and share the generated link with friends. The link will automatically include the signaling server configuration so all players connect through your server.
+
+> **Note:** Render's free tier spins down after inactivity (first request may take 30-60s to wake up).
+
+### URL Parameters Reference
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `room` | — | Room code to join |
+| `host` | `0.peerjs.com` | Custom PeerJS signaling server hostname |
+| `port` | `9000` | Signaling server port |
+| `path` | `/peerjs` | Signaling server path |
+| `key` | `peerjs` | Signaling server API key |
+| `secure` | `1` | Use HTTPS (`0` for HTTP) |
+| `turn` | — | TURN server URL (e.g. `turn:server.com:3478`) |
+| `turn_user` | — | TURN server username |
+| `turn_cred` | — | TURN server credential |
 
 ### Run Locally
 
