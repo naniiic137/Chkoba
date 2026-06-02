@@ -13,10 +13,12 @@ A multiplayer browser implementation of **Chkoba** (شكوبة), the popular Tun
 ### 2. Set up Firebase
 
 1. Go to [Firebase Console](https://console.firebase.google.com/) and create a new project
-2. Add a **Realtime Database** (choose "Start in test mode")
+2. Add a **Realtime Database**. Do **not** leave it in "test mode" (test mode is world read/write — anyone on the internet can read every hand and overwrite any game). Publish the rules from `database.rules.json` instead: **Realtime Database → Rules → paste the file contents → Publish**.
 3. Go to **Project Settings** → **General** → **Your apps** → **Add app** → **Web**
 4. Copy the `firebaseConfig` object
 5. Open `firebase-config.js` in this project and paste your config
+
+> **Note on the config:** the Firebase web config (`apiKey`, `databaseURL`, etc.) is shipped to every browser and is *not* a secret — it identifies the project, it does not authorize access. Security comes from the database rules above, not from hiding the config. See `docs/AUDIT.md` for the full security picture (and the remaining follow-ups: anonymous auth for true at-rest hand privacy, and server-side authority for cheat resistance).
 
 ### 3. Play
 
@@ -77,7 +79,7 @@ chkoba/
 - **Firebase Realtime Database** over WebRTC/PeerJS — no NAT issues, no signaling servers to deploy, works across any network. Firebase handles real-time sync via WebSockets with automatic reconnection.
 - **Link-based joining** — no room code input on the page. The host shares a URL with `?room=XXXX`, players open it and click "Join Game".
 - **Host-authoritative state** — the host runs the game logic (deal, turns, capture validation, scoring). Player moves are written to Firebase, the host processes them and writes the updated state back.
-- **Private hands** — each player's hand is stored in a separate Firebase path (`hand_0`, `hand_1`, etc.). Players only read their own hand path.
+- **Private hands** — each player's hand is stored in a separate Firebase path (`hand_0`, `hand_1`, etc.), and each client subscribes only to its own hand path. Note: with the current rules any client that knows the room code can still *read* another `hand_i` directly; enforcing true at-rest privacy requires anonymous auth + per-user rules (tracked in `docs/AUDIT.md`).
 - **40-card rounds, cumulative scoring** — multiple 40-card rounds are played until a team reaches the win threshold. The deck is reshuffled each full cycle.
 
 ### Card Images
