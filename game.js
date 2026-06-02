@@ -29,6 +29,12 @@ function getCardDisplayName(card) {
   return `${card.display}${SUIT_SYMBOLS[card.suit]}`;
 }
 
+// Spoken/announced card name for alt text and aria-label ("7 of diamonds"), since the
+// glyph form ("7♦") does not read well and the bare rank can't distinguish suits.
+function getCardAria(card) {
+  return `${card.display} of ${card.suit}`;
+}
+
 function getCardHtml(card) {
   return `<span class="card-ref ${card.suit}">${getCardDisplayName(card)}</span>`;
 }
@@ -53,22 +59,36 @@ function shuffle(arr) {
 }
 
 function findCaptureCombinations(tableCards, targetValue) {
+  // DFS with sum-pruning instead of a 2^n subset scan. Every card value is >= 1, so the
+  // recursion depth is bounded by targetValue (<= 10); the result count is capped because
+  // callers only need existence + one example, never the full enumeration. This cannot
+  // hang on a large table (e.g. force-capture off, many low cards) the way 1<<n did.
   const results = [];
   const n = tableCards.length;
-  for (let mask = 1; mask < (1 << n); mask++) {
-    let sum = 0, over = false, indices = [];
-    for (let i = 0; i < n; i++) {
-      if (mask & (1 << i)) { sum += tableCards[i].value; if (sum > targetValue) { over = true; break; } indices.push(i); }
+  const CAP = 256;
+  const dfs = (start, sum, indices) => {
+    if (results.length >= CAP) return;
+    if (sum === targetValue) { results.push(indices.slice()); return; }
+    if (sum > targetValue) return;
+    for (let i = start; i < n; i++) {
+      if (sum + tableCards[i].value > targetValue) continue;
+      indices.push(i);
+      dfs(i + 1, sum + tableCards[i].value, indices);
+      indices.pop();
     }
-    if (!over && sum === targetValue) results.push(indices);
-  }
+  };
+  dfs(0, 0, []);
   return results;
 }
 
 function genRoomCode() {
+  // Crypto-random, 8 chars from a 31-symbol alphabet (~8.5e11 keyspace) so room codes
+  // cannot be enumerated. Math.random() at 4 chars was ~923k and brute-forceable.
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const buf = new Uint32Array(8);
+  crypto.getRandomValues(buf);
   let c = '';
-  for (let i = 0; i < 4; i++) c += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < 8; i++) c += chars[buf[i] % chars.length];
   return c;
 }
 
@@ -112,6 +132,8 @@ const app = {
   _lastCardClickTime: 0,
   _lastTimerSec: 0,
   _db: null,
+  _dbError: false,
+  _audioCtx: null,
   _roomRef: null,
   _stateRef: null,
   _movesRef: null,
@@ -129,6 +151,8 @@ const app = {
       this._db = firebase.database();
     } catch (e) {
       console.error('Firebase init error:', e);
+      this._db = null;
+      this.showConfigError();
     }
 
     const params = new URLSearchParams(window.location.search);
@@ -145,6 +169,7 @@ const app = {
       }
       if (e.key === 'Escape') {
         if (this.controlsOpen) this.toggleControls();
+        else if (this.debugEnabled) this.toggleDebug();
       }
     });
   },
@@ -162,6 +187,7 @@ const app = {
   },
 
   createGame() {
+    if (!this._db) { this.showConfigError(); this.toast('Connection unavailable — check Firebase configuration'); return; }
     const name = document.getElementById('player-name').value.trim();
     if (!name) { this.toast('Please enter your name'); return; }
     this.myName = name;
@@ -188,6 +214,14 @@ const app = {
       players: { 0: this.myName },
       started: false,
     }).then(() => {
+      // NOTE: we deliberately do NOT arm onDisconnect().remove() on the room. onDisconnect
+      // fires on any transient drop (mobile blip, tab backgrounding), which would delete a
+      // live game on a 2-second hiccup and — since the host's next update() recreates the
+      // room without a host child — corrupt it permanently. Robust handling needs presence
+      // + a reconnect grace period + host migration (tracked in docs/AUDIT.md item 3). A
+      // graceful host exit is still handled: releaseRoom() removes the room and clients see
+      // the host child vanish. An ungraceful host close leaves clients on stale state until
+      // they leave — a known limitation, not a regression.
       const baseUrl = window.location.href.split('?')[0];
       const currentParams = new URLSearchParams(window.location.search);
       currentParams.delete('room');
@@ -228,6 +262,7 @@ const app = {
   },
 
   joinGame() {
+    if (!this._db) { this.showConfigError(); this.toast('Connection unavailable — check Firebase configuration'); return; }
     const name = document.getElementById('join-name').value.trim();
     if (!name) { this.toast('Please enter your name'); return; }
     this.myName = name;
@@ -242,51 +277,68 @@ const app = {
         this.toast('Room not found!');
         return;
       }
+      const playerCount = room.playerCount || 4;
 
-      const players = room.players || {};
-      let myId = -1;
-      for (let i = 0; i < (room.playerCount || 4); i++) {
-        if (!players[i]) { myId = i; break; }
-      }
-      if (myId < 0) { this.toast('Room is full!'); return; }
+      // Claim the first free slot atomically. A plain read-then-write let two players
+      // racing the same link grab the same slot. The transaction callback must be pure
+      // and re-entrant (Firebase may run it several times), so it recomputes the slot
+      // from the current value each run. claimedSlot is set on every run, so after the
+      // committing run it holds the slot we actually took — unambiguous even if two
+      // players share a display name.
+      let claimedSlot = -1;
+      this._roomRef.child('players').transaction((players) => {
+        players = players || {};
+        let slot = -1;
+        for (let i = 0; i < playerCount; i++) {
+          if (!players[i]) { slot = i; break; }
+        }
+        if (slot < 0) { claimedSlot = -1; return; } // abort: room full
+        claimedSlot = slot;
+        players[slot] = this.myName;
+        return players;
+      }, (err, committed) => {
+        if (err) { this.toast('Could not join: ' + err.message); return; }
+        if (!committed || claimedSlot < 0) { this.toast('Room is full!'); return; }
 
-      this.myPlayerId = myId;
-      this._roomRef.child('players/' + myId).set(this.myName).then(() => {
+        const myId = claimedSlot;
+        this.myPlayerId = myId;
+        // Free our slot if we disconnect, so a refresh/drop doesn't leave a ghost that
+        // blocks rejoining or stalls turn rotation.
+        this._roomRef.child('players/' + myId).onDisconnect().remove();
         this.toast('Joined room!');
 
-        // Listen for game state
         const stateRef = this._roomRef.child('state');
-        stateRef.on('value', (snap) => {
-          const state = snap.val();
+        stateRef.on('value', (s) => {
+          const state = s.val();
           if (state) this.handleStateUpdate(state);
         });
         this._playerListeners.push(stateRef);
 
-        // Listen for my hand
         const handRef = this._roomRef.child('hand_' + myId);
-        handRef.on('value', (snap) => {
-          const cards = snap.val();
-          this.myHand = cards || [];
+        handRef.on('value', (s) => {
+          this.myHand = s.val() || [];
           this.renderGame();
         });
         this._playerListeners.push(handRef);
 
-        // Listen for move log
         const logRef = this._roomRef.child('log');
-        logRef.on('value', (snap) => {
-          const log = snap.val();
+        logRef.on('value', (s) => {
+          const log = s.val();
           if (log) this.moveLog = log.slice(-50);
         });
         this._playerListeners.push(logRef);
 
-        // Listen for room deletion (host left)
-        this._roomRef.on('value', (snap) => {
-          if (!snap.val() && this.gameState) {
-            this.toast('The link is dead');
+        // Detect the host leaving WITHOUT subscribing to the whole room node — doing that
+        // streamed every player's private hand_* to every client. The host child is set
+        // once at creation and removed when the host leaves or disconnects.
+        const hostRef = this._roomRef.child('host');
+        hostRef.on('value', (s) => {
+          if (!s.val() && this.gameState) {
+            this.toast('The host left — game ended');
             this.backToLobby();
           }
         });
-        this._playerListeners.push(this._roomRef);
+        this._playerListeners.push(hostRef);
 
         this.showPlayerConnected();
       });
@@ -336,9 +388,7 @@ const app = {
 
   leaveRoom() {
     this.cleanupListeners();
-    if (this.isHost && this._roomRef) {
-      this._roomRef.remove().catch(() => {});
-    }
+    this.releaseRoom();
     this._roomRef = null;
     this._stateRef = null;
     this._movesRef = null;
@@ -351,9 +401,7 @@ const app = {
 
   backToLobby() {
     this.cleanupListeners();
-    if (this.isHost && this._roomRef) {
-      this._roomRef.remove().catch(() => {});
-    }
+    this.releaseRoom();
     this._roomRef = null;
     this._stateRef = null;
     this._movesRef = null;
@@ -376,6 +424,30 @@ const app = {
     });
     this._playerListeners = [];
     this._moveCallback = null;
+  },
+
+  // Release our presence on a clean exit: the host deletes the room; a player frees its
+  // own slot. Cancel the matching onDisconnect first so it can't fire later on a node we
+  // already removed.
+  releaseRoom() {
+    if (!this._roomRef) return;
+    if (this.isHost) {
+      this._roomRef.remove().catch(() => {});
+    } else if (this.myPlayerId >= 0) {
+      const slotRef = this._roomRef.child('players/' + this.myPlayerId);
+      slotRef.onDisconnect().cancel();
+      slotRef.remove().catch(() => {});
+    }
+  },
+
+  showConfigError() {
+    this._dbError = true;
+    const banner = document.getElementById('config-error');
+    if (banner) banner.classList.remove('hidden');
+    ['create-game-btn', 'join-game-btn'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = true;
+    });
   },
 
   // ========== START GAME ==========
@@ -911,6 +983,29 @@ const app = {
     this.renderGame();
   },
 
+  // Cards are role="button" divs; let Enter/Space activate them so the game is playable
+  // without a pointer.
+  onCardKeydown(event, zone, index) {
+    if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
+    event.preventDefault();
+    if (zone === 'hand') this.onCardClick(index);
+    else this.onTableCardClick(index);
+  },
+
+  // Fallback when a card image is missing/renamed: show the rank+suit text instead of a
+  // blank box, so a single bad filename (e.g. a custom deck) doesn't silently break.
+  onCardImgError(img) {
+    if (img.dataset.fallback) return;
+    img.dataset.fallback = '1';
+    img.style.display = 'none';
+    const parent = img.parentElement;
+    if (!parent || parent.querySelector('.card-fallback')) return;
+    const span = document.createElement('span');
+    span.className = 'card-fallback';
+    span.textContent = img.getAttribute('alt') || '?';
+    parent.appendChild(span);
+  },
+
   placeCard() {
     const gs = this.gameState;
     if (this.selectedCardIndex === -1) return;
@@ -1098,7 +1193,8 @@ const app = {
       let cls = 'card';
       if (gs.currentTurn === this.myPlayerId && this.selectedCardIndex >= 0) cls += ' capture-target selectable';
       if (isSelected) cls += ' selected';
-      return `<div class="${cls}" onclick="app.onTableCardClick(${i})"><img src="${getCardImage(card)}" alt="${card.display}"></div>`;
+      const aria = escapeHtml(getCardAria(card));
+      return `<div class="${cls}" role="button" tabindex="0" aria-label="${aria}" onclick="app.onTableCardClick(${i})" onkeydown="app.onCardKeydown(event,'table',${i})"><img src="${getCardImage(card)}" alt="${aria}" onerror="app.onCardImgError(this)"></div>`;
     }).join('');
 
     const showHint = this.selectedCardIndex >= 0 && gs.currentTurn === this.myPlayerId;
@@ -1166,7 +1262,8 @@ const app = {
       const animClass = (this.animationsEnabled && this.animateDeal) ? ' deal-animate' : '';
       const animStyle = (this.animationsEnabled && this.animateDeal) ? ` style="animation-delay: ${i * 0.12}s"` : '';
 
-      return `<div class="${cls}${animClass}"${animStyle} onclick="app.onCardClick(${i})" ondblclick="app.onCardDblClick(${i})"><img src="${getCardImage(card)}" alt="${card.display}"></div>`;
+      const aria = escapeHtml(getCardAria(card));
+      return `<div class="${cls}${animClass}"${animStyle} role="button" tabindex="0" aria-label="${aria}" onclick="app.onCardClick(${i})" onkeydown="app.onCardKeydown(event,'hand',${i})"><img src="${getCardImage(card)}" alt="${aria}" onerror="app.onCardImgError(this)"></div>`;
     }).join('');
 
     actionsEl.classList.toggle('hidden', !isMyTurn);
@@ -1263,6 +1360,9 @@ const app = {
     }
 
     modal.classList.remove('hidden');
+    // Move focus into the dialog so keyboard/screen-reader users land on the action.
+    const firstBtn = actionsEl.querySelector('button');
+    if (firstBtn) firstBtn.focus();
   },
 
   startNextRound() {
@@ -1275,9 +1375,14 @@ const app = {
   playSound(type) {
     if (!this.soundsEnabled) return;
     try {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContext) return;
-      const ctx = new AudioContext();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      // One shared context, reused for every tone. Creating a new AudioContext per call
+      // (as before) leaked them until the browser cap was hit, after which all audio
+      // silently died. Resume in case autoplay policy left it suspended until a gesture.
+      if (!this._audioCtx) this._audioCtx = new AudioCtx();
+      const ctx = this._audioCtx;
+      if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
 
       const playTone = (freq, duration, typeOpt = 'sine', gainStart = 0.1, delay = 0) => {
         const osc = ctx.createOscillator();
@@ -1952,23 +2057,6 @@ const app = {
     this.toast(`Scores set: Team 1 = ${gs.scores[0]}, Team 2 = ${gs.scores[1]}`);
     this.broadcastGameState();
     this.renderGame();
-  },
-
-  debugAddCard() {
-    // Legacy compat: add to my hand
-    this.debugAddCardToPlayer(this.myPlayerId);
-  },
-
-  debugRemoveCard() {
-    // Legacy compat: remove last card from my hand
-    const gs = this.gameState;
-    if (!gs || gs.phase !== 'playing') { this.toast('No active game'); return; }
-    const hand = gs.hands[this.myPlayerId];
-    if (!hand || hand.length === 0) { this.toast('No cards to remove'); return; }
-    hand.pop();
-    this.toast('Removed last card');
-    this.broadcastGameState();
-    this.updateDebugPanel();
   },
 
   debugSkipTurn() {

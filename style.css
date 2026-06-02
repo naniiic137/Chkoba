@@ -193,6 +193,19 @@ body::after {
   box-shadow: 0 0 0 3px var(--gold-glow), 0 0 20px rgba(232,184,32,0.1);
 }
 
+.config-error {
+  width: 100%;
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: rgba(231, 76, 60, 0.12);
+  color: var(--danger);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: center;
+}
+
 .input::placeholder {
   color: var(--text-dim);
 }
@@ -848,6 +861,27 @@ body::after {
   object-fit: cover;
   display: block;
   pointer-events: none;
+}
+
+/* Shown by onCardImgError when a card image fails to load. */
+.card-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-weight: 800;
+  font-size: 0.9rem;
+  color: #1a1a1a;
+  text-align: center;
+  padding: 2px;
+  line-height: 1.1;
+}
+
+/* Cards are keyboard-focusable (role="button" tabindex="0"); show a clear focus ring. */
+.card:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
 }
 
 .card.selectable {

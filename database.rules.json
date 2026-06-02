@@ -1,0 +1,21 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "rooms": {
+      "$room": {
+        ".read": true,
+        ".write": true,
+        "host": {
+          ".validate": "newData.isString() || !newData.exists()"
+        },
+        "moves": {
+          ".indexOn": "ts",
+          "$move": {
+            ".validate": "newData.hasChildren(['playerId', 'cardId', 'ts'])"
+          }
+        }
+      }
+    }
+  }
+}

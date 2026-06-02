@@ -16,25 +16,29 @@
         <h1 class="game-title">Chkoba</h1>
         <p class="subtitle">Tunisian Card Game</p>
 
-        <input type="text" id="player-name" class="input" placeholder="Your Name" maxlength="20">
+        <div id="config-error" class="config-error hidden" role="alert">
+          Connection unavailable — Firebase is not configured. The game cannot start.
+        </div>
+
+        <input type="text" id="player-name" class="input" placeholder="Your Name" aria-label="Your name" maxlength="20">
 
         <div class="settings-row">
           <div class="select-group">
-            <label>Players</label>
+            <label for="player-count">Players</label>
             <select id="player-count" class="select">
               <option value="2" selected>2</option>
               <option value="4">4</option>
             </select>
           </div>
           <div class="select-group">
-            <label>Win</label>
+            <label for="win-score">Win</label>
             <select id="win-score" class="select">
               <option value="11">11</option>
               <option value="21" selected>21</option>
             </select>
           </div>
           <div class="select-group">
-            <label>Timer</label>
+            <label for="turn-timer">Timer</label>
             <select id="turn-timer" class="select">
               <option value="0">Off</option>
               <option value="15">15s</option>
@@ -59,7 +63,7 @@
           </label>
         </div>
 
-        <button class="btn btn-primary btn-big" onclick="app.createGame()">Create Game</button>
+        <button id="create-game-btn" class="btn btn-primary btn-big" onclick="app.createGame()">Create Game</button>
       </div>
     </div>
 
@@ -71,9 +75,9 @@
 
         <div class="join-room-badge">Room: <strong id="join-room-code"></strong></div>
 
-        <input type="text" id="join-name" class="input" placeholder="Your Name" maxlength="20">
+        <input type="text" id="join-name" class="input" placeholder="Your Name" aria-label="Your name" maxlength="20">
 
-        <button class="btn btn-primary btn-big" onclick="app.joinGame()">Join Game</button>
+        <button id="join-game-btn" class="btn btn-primary btn-big" onclick="app.joinGame()">Join Game</button>
         <button class="btn btn-text" onclick="app.showLobby()" style="margin-top:0.75rem;">Back</button>
       </div>
     </div>
@@ -163,7 +167,7 @@
       </div>
 
       <!-- Scoreboard Modal (Round End / Game Over) -->
-      <div id="score-modal" class="modal hidden">
+      <div id="score-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="score-title">
         <div class="modal-content">
           <h2 id="score-title">Round Ended</h2>
           <div id="score-details"></div>
@@ -173,7 +177,7 @@
     </div>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <!-- ============ CONTROLS PANEL (Side Drawer) ============ -->
   <div id="controls-panel">
@@ -209,8 +213,8 @@
     </div>
   </div>
 
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js" integrity="sha384-g5H2aNdtgRBYOBLsuOAuHvUXWnw4bswmU+tYjmGc1G3JfKxl79uWwV4sQarJsLwu" crossorigin="anonymous"></script>
   <script src="firebase-config.js"></script>
   <script src="game.js"></script>
 </body>

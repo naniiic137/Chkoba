@@ -1,3 +1,14 @@
 [build]
   command = "node scripts/generate-config.js"
   publish = "."
+
+# Baseline security headers. A full Content-Security-Policy is intentionally omitted for
+# now: the markup uses inline on* handlers, so a strict CSP would require 'unsafe-inline'
+# (which defeats it) or refactoring every handler to addEventListener. Tracked as a
+# follow-up in docs/AUDIT.md.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
