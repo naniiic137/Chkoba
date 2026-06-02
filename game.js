@@ -133,6 +133,7 @@ const app = {
   _lastTimerSec: 0,
   _db: null,
   _dbError: false,
+  _verbose: false,
   _audioCtx: null,
   _roomRef: null,
   _stateRef: null,
@@ -141,21 +142,49 @@ const app = {
   _moveCallback: null,
   _roomStarted: false,
 
+  // ========== LOGGING ==========
+  // Leveled logger. error/warn always print; info/debug print only in verbose mode
+  // (debug panel open, ?debug=1, or localStorage chkoba_debug="true"). Keeps the console
+  // quiet for players while giving a full networking trace when diagnosing an issue.
+  log(level, ...args) {
+    if ((level === 'info' || level === 'debug') && !this._verbose && !this.debugEnabled) return;
+    const fn = level === 'error' ? console.error
+      : level === 'warn' ? console.warn
+      : level === 'debug' ? console.debug
+      : console.log;
+    fn('[chkoba]', ...args);
+  },
+
+  _installGlobalErrorHandlers() {
+    window.addEventListener('error', (e) => {
+      this.log('error', 'Uncaught error:', e.message, `${e.filename}:${e.lineno}:${e.colno}`);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      const reason = e.reason && e.reason.message ? e.reason.message : e.reason;
+      this.log('error', 'Unhandled promise rejection:', reason);
+    });
+  },
+
   // ========== ROOM MANAGEMENT ==========
   init() {
+    const params = new URLSearchParams(window.location.search);
+    this._verbose = params.get('debug') === '1' || localStorage.getItem('chkoba_debug') === 'true';
+    this._installGlobalErrorHandlers();
+    this.log('info', 'init: verbose logging', this._verbose ? 'ON' : 'OFF (add ?debug=1 to enable)');
+
     this.soundsEnabled = localStorage.getItem('chkoba_sounds') !== 'false';
     this.animationsEnabled = localStorage.getItem('chkoba_animations') !== 'false';
 
     try {
       firebase.initializeApp(firebaseConfig);
       this._db = firebase.database();
+      this.log('info', 'Firebase initialized');
     } catch (e) {
-      console.error('Firebase init error:', e);
+      this.log('error', 'Firebase init failed:', e);
       this._db = null;
       this.showConfigError();
     }
 
-    const params = new URLSearchParams(window.location.search);
     const code = params.get('room');
     if (code) {
       this.showJoinView(code.toUpperCase());
@@ -228,6 +257,7 @@ const app = {
       currentParams.set('room', this.roomCode);
       this.roomLink = baseUrl + '?' + currentParams.toString();
       this.toast('Room ready!');
+      this.log('info', 'room created', this.roomCode, '(' + this.playerCount + 'p)');
 
       // Listen for player joins
       const playersRef = this._roomRef.child('players');
@@ -244,19 +274,26 @@ const app = {
       });
       this._playerListeners.push(playersRef);
 
-      // Listen for moves
+      // Listen for moves. Wrap the callback so a malformed payload from a client can't
+      // throw and tear down the host's move listener (which would freeze the game).
       this._movesRef = this._roomRef.child('moves');
       this._moveCallback = (snap) => {
-        const move = snap.val();
-        if (!move || move.playerId === undefined) return;
-        snap.ref.remove();
-        this.handlePlay(move);
+        try {
+          const move = snap.val();
+          if (!move || move.playerId === undefined) return;
+          snap.ref.remove().catch(err => this.log('warn', 'failed to clear move node:', err.message));
+          this.log('debug', 'move received from player', move.playerId, move);
+          this.handlePlay(move);
+        } catch (e) {
+          this.log('error', 'move handler threw:', e);
+        }
       };
       this._movesRef.orderByChild('ts').on('child_added', this._moveCallback);
       this._playerListeners.push(this._movesRef);
 
       this.showWaiting();
     }).catch((err) => {
+      this.log('error', 'room creation failed:', err);
       this.toast('Could not create room: ' + err.message);
     });
   },
@@ -297,11 +334,12 @@ const app = {
         players[slot] = this.myName;
         return players;
       }, (err, committed) => {
-        if (err) { this.toast('Could not join: ' + err.message); return; }
-        if (!committed || claimedSlot < 0) { this.toast('Room is full!'); return; }
+        if (err) { this.log('error', 'slot-claim transaction failed:', err); this.toast('Could not join: ' + err.message); return; }
+        if (!committed || claimedSlot < 0) { this.log('info', 'join rejected: room full'); this.toast('Room is full!'); return; }
 
         const myId = claimedSlot;
         this.myPlayerId = myId;
+        this.log('info', 'joined room', this.roomCode, 'as player', myId);
         // Free our slot if we disconnect, so a refresh/drop doesn't leave a ghost that
         // blocks rejoining or stalls turn rotation.
         this._roomRef.child('players/' + myId).onDisconnect().remove();
@@ -309,16 +347,25 @@ const app = {
 
         const stateRef = this._roomRef.child('state');
         stateRef.on('value', (s) => {
-          const state = s.val();
-          if (state) this.handleStateUpdate(state);
-        });
+          try {
+            const state = s.val();
+            if (state) this.handleStateUpdate(state);
+          } catch (e) {
+            this.log('error', 'state update handler threw:', e);
+          }
+        }, (err) => this.log('error', 'state listener cancelled:', err.message));
         this._playerListeners.push(stateRef);
 
         const handRef = this._roomRef.child('hand_' + myId);
         handRef.on('value', (s) => {
-          this.myHand = s.val() || [];
-          this.renderGame();
-        });
+          try {
+            this.myHand = s.val() || [];
+            this.log('debug', 'hand updated:', this.myHand.length, 'cards');
+            this.renderGame();
+          } catch (e) {
+            this.log('error', 'hand update handler threw:', e);
+          }
+        }, (err) => this.log('error', 'hand listener cancelled:', err.message));
         this._playerListeners.push(handRef);
 
         const logRef = this._roomRef.child('log');
@@ -334,6 +381,7 @@ const app = {
         const hostRef = this._roomRef.child('host');
         hostRef.on('value', (s) => {
           if (!s.val() && this.gameState) {
+            this.log('info', 'host left — returning to lobby');
             this.toast('The host left — game ended');
             this.backToLobby();
           }
@@ -343,6 +391,7 @@ const app = {
         this.showPlayerConnected();
       });
     }).catch((err) => {
+      this.log('error', 'join failed (room read):', err);
       this.toast('Could not join: ' + err.message);
     });
   },
@@ -477,6 +526,7 @@ const app = {
       turnTimerDuration: this.turnTimerDuration,
     };
     this.addLogEntry('🎴 Game started!');
+    this.log('info', 'game started:', numPlayers, 'players, win at', this.winScore);
     this.dealRound();
   },
 
@@ -652,13 +702,21 @@ const app = {
   handlePlay(data) {
     if (!this.isHost) return;
     const gs = this.gameState, playerId = data.playerId;
-    if (playerId !== gs.currentTurn) { return; }
+    if (!gs) { this.log('warn', 'handlePlay ignored: no game state'); return; }
+    if (playerId !== gs.currentTurn) {
+      this.log('warn', 'move rejected: out of turn (player', playerId, 'current', gs.currentTurn + ')');
+      return;
+    }
 
     this.stopTurnTimer();
 
     const hand = gs.hands[playerId];
-    const cardIndex = hand.findIndex(c => c.id === data.cardId);
-    if (cardIndex === -1) { return; }
+    const cardIndex = hand ? hand.findIndex(c => c.id === data.cardId) : -1;
+    if (cardIndex === -1) {
+      this.log('warn', 'move rejected: card', data.cardId, 'not in player', playerId + "'s hand");
+      this.startTurnTimer();
+      return;
+    }
 
     const playedCard = hand[cardIndex];
     const captureIds = data.captureCardIds || [];
@@ -667,12 +725,25 @@ const app = {
 
     if (captureIds.length > 0) {
       const capIndices = captureIds.map(id => gs.tableCards.findIndex(c => c.id === id));
-      if (capIndices.includes(-1)) { return; }
+      if (capIndices.includes(-1)) {
+        this.log('warn', 'move rejected: a capture card is not on the table');
+        this.startTurnTimer();
+        return;
+      }
       const sum = capIndices.reduce((s, idx) => s + gs.tableCards[idx].value, 0);
-      if (sum !== playedCard.value) { return; }
+      if (sum !== playedCard.value) {
+        this.log('warn', 'move rejected: capture sum', sum, '!= card value', playedCard.value);
+        this.startTurnTimer();
+        return;
+      }
     } else if (gs.forceCapture && hasValidCapture && gs.tableCards.length > 0) {
+      this.log('debug', 'move rejected: force-capture is on and a capture exists');
+      this.startTurnTimer();
       return;
     }
+
+    this.log('debug', 'processing move: player', playerId, 'plays', getCardDisplayName(playedCard),
+      captureIds.length ? '(capture)' : '(place)');
 
     hand.splice(cardIndex, 1);
     const teamIndex = gs.players[playerId].team;
@@ -786,6 +857,8 @@ const app = {
     gs.lastScore = { mostCardsPt, mostDiamondsPt, sevenDiamondsPt };
     gs.phase = 'round_end';
     this.addLogEntry(`📊 Round scored — Team 1: ${gs.scores[0]}, Team 2: ${gs.scores[1]}`);
+    this.log('info', 'round scored:', gs.scores[0], '-', gs.scores[1],
+      '(cards/diamonds/7♦ pts:', mostCardsPt, mostDiamondsPt, sevenDiamondsPt + ')');
     this.broadcastGameState();
     this.renderGame();
     this.showScoreboard();
@@ -801,6 +874,7 @@ const app = {
     if (winner >= 0) {
       gs.phase = 'finished'; gs.winner = winner;
       this.addLogEntry(`🏆 Team ${winner + 1} wins the game!`);
+      this.log('info', 'game over: Team', winner + 1, 'wins', gs.scores[0], '-', gs.scores[1]);
       this.playSound('win');
       this.broadcastGameState(); this.renderGame(); this.showScoreboard();
       return;
@@ -827,7 +901,11 @@ const app = {
       updates['hand_' + i] = gs.hands[i] || [];
     }
     updates['log'] = this.moveLog.slice(-50);
-    this._roomRef.update(updates);
+    this._roomRef.update(updates).catch(err => {
+      this.log('error', 'broadcastGameState write failed:', err.message);
+      this.toast('Connection issue — move may not have synced');
+    });
+    this.log('debug', 'broadcast state: turn', gs.currentTurn, 'phase', gs.phase, 'deck', gs.deck.length);
 
     // Update host's local hand
     this.myHand = gs.hands[0] || [];
@@ -1042,13 +1120,19 @@ const app = {
 
     const executeSend = () => {
       if (this.isHost) {
+        this.log('debug', 'sending move (host, direct)', { cardId, captureCardIds });
         this.handlePlay({ playerId: this.myPlayerId, cardId, captureCardIds });
       } else if (this._roomRef) {
+        this.log('debug', 'sending move (push to Firebase)', { cardId, captureCardIds });
         this._roomRef.child('moves').push({
           playerId: this.myPlayerId,
           cardId,
           captureCardIds,
           ts: Date.now(),
+        }).catch(err => {
+          this.log('error', 'move push failed:', err.message);
+          this.toast('Could not send move — check your connection');
+          this.isSubmittingMove = false;
         });
         this.cancelSelection();
       }
@@ -1450,7 +1534,7 @@ const app = {
         osc.stop(ctx.currentTime + 0.35);
       }
     } catch (e) {
-      console.warn('Web Audio error:', e);
+      this.log('warn', 'Web Audio error:', e.message);
     }
   },
 
@@ -1721,11 +1805,12 @@ const app = {
 
   toggleDebug() {
     this.debugEnabled = !this.debugEnabled;
+    this.log('info', 'debug mode', this.debugEnabled ? 'ON (verbose logging enabled)' : 'OFF');
     const panel = document.getElementById('debug-panel');
     const checkbox = document.getElementById('debug-toggle');
-    panel.classList.toggle('hidden', !this.debugEnabled);
+    if (panel) panel.classList.toggle('hidden', !this.debugEnabled);
     if (checkbox) checkbox.checked = this.debugEnabled;
-    if (this.debugEnabled) {
+    if (this.debugEnabled && panel) {
       this.updateDebugPanel();
       this.makeDebugDraggable(panel);
     }
