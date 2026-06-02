@@ -1,52 +1,296 @@
+@import url('https://fonts.googleapis.com/css2?family=Reem+Kufi:wght@500;600;700&family=Rakkas&display=swap');
+
 /* ============================================================================
-   THEME — Zellige Midnight  (Tunisia-forward)
-   Dark indigo felt, coin-gold + terracotta, a Kairouan 8-point-star tile in the
-   backdrop and card backs, شكوبة wordmark prominent. Warmer, ornamental — the
-   cultural pick. Themer owns this file only; contract lives in shared/*.
+   THEME - Zellige Midnight  (Tunisia-forward)
+   "Sidi Bou Saïd at midnight." Deep indigo night-felt, coin-gold + Nabeul
+   terracotta, a real Kairouan 8-point star (khatim, two overlapping squares,
+   c. 836 CE) breathing in the backdrop and crisp on the card backs. The شكوبة
+   wordmark is the hero. Warm whitewash-ivory card stock.
+
+   Sources, named and specific: Kairouan khatim geometry; Sidi Bou Saïd
+   indigo + whitewash; Nabeul/Kairouan ceramic gold/terracotta/teal-blue.
+   Reserved flag-red (--haya) stays on the sabʿa l-ḥayya + win states only.
+
+   Themer owns this file only. Contract + layout live in shared/*. Every rule is
+   scoped to [data-theme="zellige"]; only the leading @import sits outside.
+   @keyframes are global, so theme keyframes are prefixed "zlg-" to avoid
+   clobbering base.css (which owns breathe/pulse/stageBreath/grainShift/etc).
    ========================================================================== */
+
 [data-theme="zellige"] {
+  /* Reem Kufi carries the شكوبة wordmark - real geometric Kufi character,
+     Maghribi-adjacent, NOT Naskh and NOT faux-Kufic Latin. Cinzel stays for
+     incised Latin display. */
   --font-display: 'Cinzel', Georgia, serif;
+  --font-arabic:  'Reem Kufi', 'Aref Ruqaa', serif;
 
-  --bg:    #0C1424;
-  --bg-2:  #0F1A2E;
-  --felt:  radial-gradient(130% 130% at 50% 24%, #16335a 0%, #102545 52%, #0a1426 100%);
-  --felt-edge: rgba(4,8,18,.66);
+  /* ---- stage: layered indigo night, not one flat saturated blue ----
+     Warm gold breath up top, Sidi-Bou indigo body, near-black settled floor. */
+  --bg:    #0A1322;
+  --bg-2:  #0E1B30;
+  --felt:
+    radial-gradient(78% 58% at 50% 16%, rgba(214,169,62,.10) 0%, transparent 55%),
+    radial-gradient(120% 120% at 50% 30%, #1a3a63 0%, #122a4c 46%, #0c1d38 72%, #070f1f 100%);
+  --felt-edge: rgba(3,7,16,.72);
 
-  --text:     #F2E8CF;
-  --text-dim: rgba(242,232,207,.66);
-  --text-mut: rgba(242,232,207,.4);
+  /* whitewash-on-indigo text, warm */
+  --text:     #F4EBD2;
+  --text-dim: rgba(244,235,210,.66);
+  --text-mut: rgba(244,235,210,.40);
 
+  /* ---- accents: coin-gold primary, terracotta secondary, Sidi-Bou cool ---- */
   --gold:    #D6A93E;
-  --gold-lo: #93701F;
-  --gold-hi: #F2D98A;
-  --accent:   #2E84B8;   /* Sidi Bou Saïd blue, lifted */
-  --accent-2: #CE6A2C;   /* terracotta */
+  --gold-lo: #8C6A1E;
+  --gold-hi: #F4DC92;
+  --accent:   #2E84B8;   /* Sidi Bou Saïd blue, lifted (cool counter-tone) */
+  --accent-2: #CC6A2E;   /* Nabeul / Kairouan terracotta */
+  /* --haya inherits the reserved flag-red from base. Do not reroute it. */
 
-  --card-face:  linear-gradient(160deg, #F7EFD7 0%, #F0E4C4 58%, #E7D6AE 100%);
-  --card-edge:  rgba(20,40,70,.34);
-  --card-red:   #BE3A2C;
-  --card-ink:   #1B3252;
+  /* ---- cards: warm whitewash-ivory stock, indigo + terracotta ink ---- */
+  --card-face:  linear-gradient(158deg, #FAF3DE 0%, #F4E9CB 56%, #ECDDB6 100%);
+  --card-edge:  rgba(22,44,76,.34);
+  --card-shadow:
+    0 7px 16px rgba(4,10,22,.5),
+    0 1px 0 rgba(255,255,255,.45) inset,
+    0 0 0 .5px rgba(140,106,30,.25) inset;
+  --card-red:   #C0402E;   /* French red suits on ivory (separate from --haya) */
+  --card-ink:   #1C3556;   /* French dark suits = deep indigo, not black */
+
+  /* khatim card back - declared as a layered paint below; this is the fallback */
   --card-back:
-    radial-gradient(circle at 50% 50%, rgba(214,169,62,.22) 0 18%, transparent 19%),
-    repeating-linear-gradient(45deg, #133157 0 10px, #0f2848 10px 20px);
-  --card-back-ink: var(--gold);
+    radial-gradient(circle at 50% 50%, rgba(244,220,146,.16) 0 14%, transparent 16%),
+    repeating-linear-gradient(45deg, #143257 0 11px, #0f274a 11px 22px);
+  --card-back-ink: var(--gold-hi);
 
-  --panel-edge: rgba(214,169,62,.26);
-  --glow-gold:  0 0 18px rgba(214,169,62,.45);
+  /* ---- framing / glow ---- */
+  --panel:      rgba(10,19,34,.92);
+  --panel-edge: rgba(214,169,62,.28);
+  --glow-gold:  0 0 18px rgba(214,169,62,.46);
+
+  /* warmer grain - fine ceramic tooth, not TV static */
+  --grain-url: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-/* 8-point-star zellige tile, very subtle, breathing across the felt */
+/* ============================================================================
+   FELT - the breathing zellige field
+   The 8-point khatim = two overlapping squares (one rotated 45deg). Drawn once
+   as an SVG data-uri tile, tinted gold + Sidi-Bou blue, kept low-contrast so it
+   reads as texture, never noise. A second offset star-node lattice (the small
+   dot where four tiles meet) ties the grid together the way real zellige does.
+   ========================================================================== */
 [data-theme="zellige"] #game-board {
+  background-color: #0c1d38;
   background-image:
-    radial-gradient(circle, transparent 68%, rgba(46,132,184,.05) 70%),
+    /* khatim tile: two overlapping squares, gold + faint blue, on transparent */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120' viewBox='0 0 120 120'%3E%3Cg fill='none' stroke-width='1.4'%3E%3Crect x='30' y='30' width='60' height='60' stroke='%23d6a93e' stroke-opacity='0.10'/%3E%3Crect x='30' y='30' width='60' height='60' transform='rotate(45 60 60)' stroke='%23d6a93e' stroke-opacity='0.10'/%3E%3Crect x='30' y='30' width='60' height='60' stroke='%232e84b8' stroke-opacity='0.06'/%3E%3Crect x='30' y='30' width='60' height='60' transform='rotate(45 60 60)' stroke='%232e84b8' stroke-opacity='0.06'/%3E%3C/g%3E%3Ccircle cx='60' cy='60' r='2.4' fill='%23d6a93e' fill-opacity='0.10'/%3E%3Ccircle cx='0' cy='60' r='1.6' fill='%23d6a93e' fill-opacity='0.07'/%3E%3Ccircle cx='120' cy='60' r='1.6' fill='%23d6a93e' fill-opacity='0.07'/%3E%3Ccircle cx='60' cy='0' r='1.6' fill='%23d6a93e' fill-opacity='0.07'/%3E%3Ccircle cx='60' cy='120' r='1.6' fill='%23d6a93e' fill-opacity='0.07'/%3E%3C/svg%3E"),
     var(--felt);
-  background-size: 64px 64px, cover;
+  /* --felt is two gradients, so this declaration has 3 layers (tile + 2 felt).
+     Give every longhand 3 values so the night gradient is NOT tiled. */
+  background-repeat: repeat, no-repeat, no-repeat;
+  background-size: 120px 120px, cover, cover;
+  background-position: center, center, center;
+  animation: zlg-felt-breathe calc(22s / max(var(--juice-k), .15)) ease-in-out infinite;
 }
+/* slow drift + tide so the tilework is never frozen; only the tile layer moves */
+@keyframes zlg-felt-breathe {
+  0%, 100% { background-position: center top,    center, center; }
+  50%      { background-position:
+               calc(50% + 8px * var(--juice-k)) calc(0px + 6px * var(--juice-k)),
+               center, center; }
+}
+
+/* corner medallions: a quarter-khatim rosette anchored in two opposite corners,
+   echoing the tiled border of a Kairouani panel without crowding the table */
+[data-theme="zellige"] #game-board::before,
+[data-theme="zellige"] #game-board::after {
+  content: ""; position: absolute; z-index: 1; pointer-events: none;
+  width: 132px; height: 132px;
+  background-repeat: no-repeat; background-position: center; background-size: contain;
+  opacity: .5;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='132' viewBox='0 0 132 132'%3E%3Cg fill='none' stroke='%23d6a93e' stroke-opacity='0.5' stroke-width='1.5'%3E%3Crect x='36' y='36' width='60' height='60'/%3E%3Crect x='36' y='36' width='60' height='60' transform='rotate(45 66 66)'/%3E%3Ccircle cx='66' cy='66' r='9'/%3E%3C/g%3E%3Cg fill='none' stroke='%232e84b8' stroke-opacity='0.35' stroke-width='1'%3E%3Crect x='44' y='44' width='44' height='44'/%3E%3Crect x='44' y='44' width='44' height='44' transform='rotate(45 66 66)'/%3E%3C/g%3E%3Ccircle cx='66' cy='66' r='2.6' fill='%23d6a93e' fill-opacity='0.7'/%3E%3C/svg%3E");
+}
+[data-theme="zellige"] #game-board::before { top: 6px;    left: 6px; }
+[data-theme="zellige"] #game-board::after  { bottom: 6px; right: 6px; }
+
+/* ============================================================================
+   ATMOSPHERE
+   ========================================================================== */
 [data-theme="zellige"] .fx-glow {
-  background: radial-gradient(46% 36% at 50% 32%, rgba(214,169,62,.14), transparent 70%);
+  background:
+    radial-gradient(48% 38% at 50% 30%, rgba(214,169,62,.16), transparent 72%),
+    radial-gradient(40% 46% at 50% 96%, rgba(46,132,184,.10), transparent 70%);
 }
+[data-theme="zellige"] .fx-vignette {
+  background: radial-gradient(116% 92% at 50% 40%, transparent 48%, var(--felt-edge) 100%);
+}
+[data-theme="zellige"] .fx-grain { opacity: .04; }
+
+/* ============================================================================
+   BRAND - the شكوبة hero wordmark
+   Reem Kufi, coin-gold with a hot highlight, a soft Sidi-Bou cool shadow under
+   the gold halo for depth, and a slow ceramic-glaze shimmer across the glyphs.
+   ========================================================================== */
 [data-theme="zellige"] .brand-mark {
-  font-size: 1.95rem; color: var(--gold-hi);
-  text-shadow: 0 0 20px rgba(214,169,62,.5);
+  position: relative;
+  display: inline-block;
+  font-family: var(--font-arabic);
+  font-weight: 700;
+  font-size: 2.15rem;
+  line-height: 1;
+  padding-right: .28rem;
+  color: var(--gold-hi);
+  background: linear-gradient(180deg, #F8E6A8 0%, #D6A93E 52%, #A87C24 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* glyph fill is transparent, so text-shadow can't render - the gold halo and
+     cool under-shadow are cast with drop-shadow filters instead */
+  filter:
+    drop-shadow(0 0 14px rgba(214,169,62,.5))
+    drop-shadow(0 1px 0 rgba(46,132,184,.4))
+    drop-shadow(0 2px 1px rgba(4,10,22,.55));
 }
-[data-theme="zellige"] .player-label { color: var(--accent); }
+/* a single specular wipe; gated by juice so reduced-motion stills it */
+[data-theme="zellige"] .brand-mark::after {
+  content: "شكوبة";
+  position: absolute; inset: 0;
+  padding-right: .28rem;
+  background: linear-gradient(105deg, transparent 38%, rgba(255,255,255,.85) 50%, transparent 62%);
+  /* needs size > box so the wipe has room to travel across background-position */
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  opacity: calc(var(--juice-k) * .9);
+  animation: zlg-wordmark-sheen 7s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes zlg-wordmark-sheen {
+  0%, 72%, 100% { background-position: -120% 0; }
+  86%           { background-position: 120% 0; }
+}
+
+/* ============================================================================
+   CARD BACK - the signature khatim (crisp, interlaced)
+   Built from two overlapping squares + an inner rosette in a single SVG. A
+   data-uri can't read CSS vars, so the medallion ink is hardcoded gold; the
+   framing keyline (base .card-back::after) stays token-driven via --card-back-ink.
+   ========================================================================== */
+[data-theme="zellige"] .card-back {
+  background-color: #102a4c;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='136' viewBox='0 0 96 136'%3E%3Crect width='96' height='136' fill='%23102a4c'/%3E%3Cg fill='none' stroke='%23f4dc92' stroke-width='1.1'%3E%3Cg stroke-opacity='0.9'%3E%3Crect x='24' y='44' width='48' height='48'/%3E%3Crect x='24' y='44' width='48' height='48' transform='rotate(45 48 68)'/%3E%3C/g%3E%3Cg stroke-opacity='0.55'%3E%3Crect x='32' y='52' width='32' height='32'/%3E%3Crect x='32' y='52' width='32' height='32' transform='rotate(45 48 68)'/%3E%3C/g%3E%3Ccircle cx='48' cy='68' r='6.5' stroke-opacity='0.85'/%3E%3C/g%3E%3Ccircle cx='48' cy='68' r='2' fill='%23f4dc92' fill-opacity='0.95'/%3E%3Cg fill='none' stroke='%232e84b8' stroke-width='0.9' stroke-opacity='0.5'%3E%3Crect x='28' y='48' width='40' height='40' transform='rotate(45 48 68)'/%3E%3C/g%3E%3C/svg%3E"),
+    radial-gradient(120% 120% at 50% 28%, #163763 0%, #102a4c 60%, #0b1f3b 100%);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover, cover;
+}
+/* base draws .card-back::after as a single keyline; make it a double gold rule
+   to read like a tiled border around the medallion */
+[data-theme="zellige"] .card-back::after {
+  inset: 8%;
+  border: 1px solid color-mix(in srgb, var(--card-back-ink) 62%, transparent);
+  border-radius: 6px;
+  box-shadow:
+    0 0 0 1px rgba(11,31,59,.9),
+    0 0 0 2px color-mix(in srgb, var(--card-back-ink) 28%, transparent);
+}
+/* mini backs (captured piles): drop the medallion, keep the indigo + keyline so
+   tiny tiles stay legible and cheap */
+[data-theme="zellige"] .card-back.mini {
+  background-image: radial-gradient(120% 120% at 50% 30%, #163763, #0b1f3b);
+}
+
+/* ============================================================================
+   CARD FACES - keep ivory + legible; ornament only in the frame
+   Court emblems get a terracotta-bordered plate + a faint khatim watermark.
+   Suit pips themselves are JS-injected SVG; we touch color/glow only.
+   ========================================================================== */
+[data-theme="zellige"] .card__court {
+  border-color: color-mix(in srgb, var(--accent-2) 55%, transparent);
+  border-radius: 7px;
+  background:
+    radial-gradient(120% 120% at 50% 18%, rgba(204,106,46,.07), transparent 60%);
+  box-shadow: inset 0 0 0 1px rgba(204,106,46,.12);
+}
+[data-theme="zellige"] .card__court span {
+  text-shadow: 0 1px 0 rgba(255,255,255,.5);
+}
+/* khatim watermark behind courts, faint so it never fights the rank */
+[data-theme="zellige"] .card__watermark {
+  opacity: .06;
+}
+[data-theme="zellige"] .card__watermark svg {
+  width: 58%; height: 58%;
+}
+
+/* prestige: the sabʿa l-ḥayya already wears the reserved red ring from base;
+   warm its sheen toward gold-into-red without touching --haya elsewhere */
+[data-theme="zellige"] .card.is-haya .card__inner {
+  box-shadow:
+    var(--card-shadow),
+    0 0 0 1.5px var(--haya),
+    var(--glow-haya),
+    0 0 26px rgba(204,106,46,.3);
+}
+
+/* ============================================================================
+   COIN / dīnārī suit polish  (color + glow only; geometry is JS-injected)
+   This theme is the natural home for coins. Under [data-suitstyle="coin"] the
+   base map already paints diamonds gold; we add a soft minted halo so the
+   coin star reads as struck metal, and warm the swords' cool steel.
+   ========================================================================== */
+[data-theme="zellige"][data-suitstyle="coin"] .card[data-suit="diamonds"] .pip svg,
+[data-theme="zellige"] [data-suitstyle="coin"] .card[data-suit="diamonds"] .pip svg {
+  filter: drop-shadow(0 0 1.5px rgba(214,169,62,.55));
+}
+[data-theme="zellige"][data-suitstyle="coin"] .card[data-suit="spades"],
+[data-theme="zellige"] [data-suitstyle="coin"] .card[data-suit="spades"] {
+  --suit-color: #5E7686;   /* swords: cool steel, slightly warmed toward Sidi-Bou */
+}
+
+/* ============================================================================
+   UI POLISH - labels, badges, buttons
+   ========================================================================== */
+[data-theme="zellige"] .player-label {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-dim));
+  letter-spacing: .24em;
+}
+[data-theme="zellige"] .room-badge {
+  border-color: var(--panel-edge);
+  background: linear-gradient(180deg, rgba(214,169,62,.06), rgba(46,132,184,.04));
+  color: var(--text-dim);
+}
+[data-theme="zellige"] .score-badge {
+  border-color: var(--panel-edge);
+  background:
+    linear-gradient(180deg, rgba(214,169,62,.07), rgba(4,10,22,.3));
+  box-shadow: inset 0 0 0 1px rgba(4,10,22,.4);
+}
+[data-theme="zellige"] .score-badge.team2 .score-num { color: var(--accent); }
+
+[data-theme="zellige"] .opponent-info.active-turn {
+  border-color: var(--gold);
+  box-shadow:
+    var(--glow-gold),
+    inset 0 0 0 1px rgba(214,169,62,.25);
+}
+
+[data-theme="zellige"] .btn-action {
+  border-color: var(--gold-lo);
+  background:
+    linear-gradient(180deg, rgba(214,169,62,.16), rgba(204,106,46,.06));
+  color: var(--gold-hi);
+}
+[data-theme="zellige"] .btn-action:hover {
+  background: linear-gradient(180deg, rgba(214,169,62,.26), rgba(204,106,46,.12));
+  box-shadow: var(--glow-gold);
+}
+
+/* shkobba shout keeps the reserved flag-red from base; add a warm under-halo */
+[data-theme="zellige"] .shkobba-announce {
+  text-shadow: var(--glow-haya), 0 2px 12px rgba(204,106,46,.4);
+}

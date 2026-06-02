@@ -1,50 +1,417 @@
+/* Wallpoet: LED/stencil numerals for the score payoff only. Must be first line(s);
+   the display/body/wordmark faces from index.html (Cinzel/Alegreya/Aref Ruqaa) stay. */
+@import url('https://fonts.googleapis.com/css2?family=Wallpoet&display=swap');
+
 /* ============================================================================
    THEME — Balatro Max  (feel-dominant)
-   Juice cranked: strong holographic cards, CRT-lite whisper, count-up theater,
-   bolder neon-on-dark contrast. The "fun" pick. Themer owns this file only.
+   Juice cranked: holographic foil cards, CRT-lite whisper, count-up scoring
+   theater, springier everything, bold neon-on-dark contrast. The "fun" pick.
+
+   Reduced-motion discipline (the rule that governs this whole file): the OS
+   setting only forces --juice-k -> 0; it does NOT add `animation: none`. So
+   every animated layer here is k-scaled (opacity/transform/glow multiplied by
+   --juice-k) and therefore goes visually inert at k=0 even while its keyframes
+   technically keep running. No motion is allowed to be visible independent of k.
+
+   Perf discipline: the always-on foil is a STATIC sheen (no per-frame loop on
+   every card). Only single nodes animate continuously -- the hovered card, the
+   one haya, the score, and the backdrop. Animations ride transform / opacity /
+   background-position (compositor-friendly); no per-frame blur or many-node
+   box-shadow churn.
    ========================================================================== */
 [data-theme="balatro"] {
   --font-display: 'Cinzel', Georgia, serif;
   --font-num:     'Oswald', sans-serif;
 
-  --bg:    #0A0E16;
-  --bg-2:  #0E1322;
-  --felt:  radial-gradient(120% 120% at 50% 30%, #1d2742 0%, #121a30 55%, #080b14 100%);
-  --felt-edge: rgba(2,4,10,.72);
+  /* Stage: a deep midnight-indigo felt -- darker and more saturated than the
+     other themes so the neon reads as light, not paint. */
+  --bg:    #070A12;
+  --bg-2:  #0C1120;
+  --felt:  radial-gradient(125% 120% at 50% 26%, #1a2750 0%, #101a36 52%, #060912 100%);
+  --felt-edge: rgba(2,3,9,.78);
 
-  --text:     #F4ECDA;
-  --text-dim: rgba(244,236,218,.66);
-  --text-mut: rgba(244,236,218,.4);
+  --text:     #F5EDDB;
+  --text-dim: rgba(245,237,219,.66);
+  --text-mut: rgba(245,237,219,.40);
 
+  /* Coin-gold stays the prestige tone; the neon pair is an electrified Sidi Bou
+     Saïd blue (Tunisian thread) against hot magenta -- not the canonical teal/
+     pink vaporwave duo, so it reads "Chkoba at midnight" not generic synthwave. */
   --gold:    #FFC23D;
-  --gold-lo: #B07E1C;
-  --gold-hi: #FFE08A;
-  --accent:   #2BD6C4;   /* electric teal */
-  --accent-2: #FF5C7A;   /* hot pink */
+  --gold-lo: #A9781A;
+  --gold-hi: #FFE79C;
+  --accent:   #2FA8FF;   /* electrified Sidi Bou Saïd blue */
+  --accent-2: #FF3D8B;   /* hot magenta */
 
-  --card-face:  linear-gradient(160deg, #FBF4E2 0%, #F3E8CC 60%, #ECDCB6 100%);
-  --card-edge:  rgba(10,14,22,.4);
-  --card-red:   #E23B5A;
-  --card-ink:   #1A2233;
-  --card-shadow: 0 8px 20px rgba(0,0,0,.55), 0 0 0 1px rgba(255,194,61,.2) inset;
-  --card-back:  repeating-linear-gradient(45deg, #b21d3a 0 9px, #7a142a 9px 18px);
+  /* Cards: warm aged paper, kept light so the foil overlay never starves the
+     pips of contrast. Edges get a faint gold inner-line for the arcade frame. */
+  --card-face:  linear-gradient(157deg, #FCF6E6 0%, #F4EACF 58%, #ECDCB5 100%);
+  --card-edge:  rgba(8,11,20,.45);
+  --card-red:   #E22B57;
+  --card-ink:   #18203A;
+  --card-shadow:
+    0 9px 22px rgba(0,0,0,.58),
+    0 2px 5px rgba(0,0,0,.4),
+    0 0 0 1px rgba(255,194,61,.22) inset,
+    0 1px 0 rgba(255,255,255,.5) inset;
+  --card-back:
+    repeating-linear-gradient(45deg, #16244c 0 9px, #0f1a38 9px 18px);
   --card-back-ink: var(--gold-hi);
 
-  --panel-edge: rgba(255,194,61,.28);
-  --glow-gold:  0 0 22px rgba(255,194,61,.6);
+  --panel-edge: rgba(255,194,61,.30);
+  --ring:       0 0 0 1px var(--panel-edge);
+  --glow-gold:  0 0 24px rgba(255,194,61,.62);
+  --glow-haya:  0 0 26px rgba(200,16,46,.6);
+  --grain-url: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='130' height='130'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 
-  /* punchier motion + stronger sheen baseline */
-  --spring: cubic-bezier(.34, 1.8, .5, 1);
+  /* Punchier overshoot than the contract default -- the card snaps and rings. */
+  --spring: cubic-bezier(.30, 2.0, .42, 1);
 }
 
-/* every card carries a faint always-on holo; hover blows it out */
-[data-theme="balatro"] .card .card__holo { opacity: calc(.12 * var(--juice-k)); }
-[data-theme="balatro"] .card.is-interactive:hover .card__holo { opacity: calc(1 * var(--juice-k)); }
+/* ============================================================================
+   HOLOGRAPHIC FOIL  — the feature
+   Two stacked passes give it depth instead of a single smear:
+     1) .card__holo        — the diagonal RAINBOW band (color-dodge).
+     2) .card__holo::after — a finer cross-hatch "foil grain" (overlay) so the
+        sheen has texture, like real holographic stock under light.
+   A transparent corridor is held through the vertical center of the rainbow so
+   the rank + center pips keep contrast even when the foil is blown out on hover.
+   IMPORTANT: any rule that re-paints `background` must also re-state
+   `background-position`/`background-size`, because juice.js drives the foil
+   purely through --mx/--my on background-position. The shorthand would wipe it.
+   ========================================================================== */
+[data-theme="balatro"] .card__holo {
+  /* Oil-slick rainbow. hard-light (not color-dodge) is the fix: color-dodge of
+     any color over near-white ivory clips every channel to white and the hue is
+     lost. hard-light keeps saturated hue on a light base. A transparent corridor
+     at 47-53% in the band keeps the central pip column clean; transparent is the
+     no-op for hard-light, so the corridor leaves the paper untouched. */
+  background:
+    linear-gradient(112deg,
+      transparent 9%,
+      rgba(255,46,135,.55) 23%,
+      rgba(255,196,54,.5) 33%,
+      rgba(86,240,170,.5) 42%,
+      transparent 47%,
+      transparent 53%,
+      rgba(64,214,255,.5) 60%,
+      rgba(60,150,255,.55) 70%,
+      rgba(196,110,255,.55) 80%,
+      transparent 91%);
+  background-size: 240% 240%;
+  background-position: var(--mx) var(--my);
+  mix-blend-mode: hard-light;
+  /* Always-on sheen on every card so a fanned hand reads as foil at rest; no
+     continuous animation here (static), hover/haya add the motion. */
+  opacity: calc(.34 * var(--juice-k));
+  transition: opacity .22s var(--ease-out);
+  pointer-events: none;
+}
+[data-theme="balatro"] .card__holo::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit;
+  /* Bright specular striations riding over the colored bands = the "shine" of
+     real foil. screen so the glints add light without darkening the hue. */
+  background: repeating-linear-gradient(98deg,
+    rgba(255,255,255,.18) 0 1.5px,
+    rgba(0,0,0,0) 1.5px 6px);
+  background-size: 200% 100%;
+  background-position: var(--mx) 0;
+  mix-blend-mode: screen;
+  opacity: calc(.5 * var(--juice-k));
+  pointer-events: none;
+}
 
+/* Hover blows the foil out and turns ONE card's rainbow into a slow living
+   shimmer. opacity is k-scaled so it is invisible (and effectively idle) at k=0. */
+[data-theme="balatro"] .card.is-interactive:hover .card__holo {
+  opacity: calc(.92 * var(--juice-k));
+  animation: foilFlow calc(3.6s / max(var(--juice-k), .001)) linear infinite;
+}
+@keyframes foilFlow {
+  0%   { background-position: calc(var(--mx) - 45%) var(--my); }
+  100% { background-position: calc(var(--mx) + 45%) var(--my); }
+}
+/* Selected card: foil sits a touch hotter and gains a gold seat-ring. */
+[data-theme="balatro"] .card.selected .card__holo { opacity: calc(.6 * var(--juice-k)); }
+[data-theme="balatro"] .card.selected .card__inner {
+  box-shadow:
+    0 20px 34px rgba(0,0,0,.6),
+    0 0 0 2px var(--gold),
+    0 0 26px rgba(255,194,61,.5);
+}
+
+/* Specular glare: tight hot point that the pointer carries across the foil.
+   Must keep `at var(--mx) var(--my)` so it tracks; bias the hottest core small
+   so it sparkles on the edges/frame rather than washing the central pips. */
+[data-theme="balatro"] .card__glare {
+  background:
+    radial-gradient(90px 90px at var(--mx) var(--my),
+      rgba(255,255,255,.85) 0%,
+      rgba(255,240,200,.35) 26%,
+      rgba(255,255,255,0) 62%);
+  mix-blend-mode: screen;
+  opacity: calc(var(--holo) * var(--juice-k) * .85);
+  transition: opacity .2s var(--ease-out);
+  pointer-events: none;
+}
+
+/* ============================================================================
+   THE sabʿa l-ḥayya  — legendary foil + reserved-red aura
+   It is the only card that gets a continuously animated rainbow AND a pulsing
+   red halo. Both are single-node and fully k-scaled. The flag-red (--haya)
+   stays reserved to this card; the rainbow rides --accent/--accent-2/gold.
+   ========================================================================== */
+[data-theme="balatro"] .card.is-haya .card__holo {
+  opacity: calc(.5 * var(--juice-k));
+  animation: hayaFoil calc(4s / max(var(--juice-k), .001)) linear infinite;
+}
+@keyframes hayaFoil {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 240% 50%; }
+}
+[data-theme="balatro"] .card.is-haya .card__inner {
+  /* Static seated red/gold ring. All the PULSE lives on the ::after halo below,
+     whose opacity is k-scaled -- so this card has no motion that survives k=0.
+     A box-shadow ring-spread throb can't be k-gated cleanly, hence no animation
+     here; the scaling halo carries the "legendary, alive" read instead. */
+  box-shadow:
+    var(--card-shadow),
+    0 0 0 1.5px var(--haya),
+    0 0 26px rgba(200,16,46,.55);
+}
+/* A larger halo ring on a pseudo-element so the glow breathes in SCALE
+   (transform, cheap) rather than animating shadow spread every frame. Single
+   node; both transform and opacity are k-scaled -> fully inert at k=0. */
+[data-theme="balatro"] .card.is-haya { position: relative; }
+[data-theme="balatro"] .card.is-haya::after {
+  content: ""; position: absolute; inset: -6%;
+  border-radius: calc(var(--card-radius) + 4px);
+  background: radial-gradient(closest-side,
+    rgba(200,16,46,.40), rgba(255,61,139,.16) 60%, transparent 78%);
+  z-index: -1; pointer-events: none;
+  opacity: calc(.9 * var(--juice-k));
+  animation: hayaHalo 2.4s var(--ease-out) infinite;
+}
+@keyframes hayaHalo {
+  0%, 100% { transform: scale(.92); opacity: calc(.5 * var(--juice-k)); }
+  50%      { transform: scale(1.06); opacity: calc(.9 * var(--juice-k)); }
+}
+
+/* ============================================================================
+   SCORING THEATER  — count-up as a slot-machine payoff
+   Wallpoet LED numerals; each tick the .bumping class re-fires. We override the
+   contract scoreBump to add neon glow + a bigger pop. The transform scale is the
+   visible motion -- it is fine to leave unscaled because the contract restarts
+   the class per tick and reduced-motion (.reduce) nulls animation; but the
+   surrounding always-present glow below is k-scaled so the static look calms.
+   ========================================================================== */
+[data-theme="balatro"] .score-num {
+  font-family: 'Wallpoet', var(--font-num);
+  font-weight: 400;   /* Wallpoet ships 400 only; avoid faux-bold synthesis */
+  letter-spacing: .04em;
+  color: var(--gold);
+  text-shadow:
+    0 0 10px rgba(255,194,61,.55),
+    0 0 calc(20px * var(--juice-k)) rgba(255,194,61,.4);
+}
+[data-theme="balatro"] .score-badge.team2 .score-num {
+  color: var(--accent);
+  text-shadow:
+    0 0 10px rgba(47,168,255,.55),
+    0 0 calc(20px * var(--juice-k)) rgba(47,168,255,.4);
+}
+[data-theme="balatro"] .score-num.bumping { animation: scoreSlam .36s var(--spring); }
+@keyframes scoreSlam {
+  0%   { transform: scale(1); }
+  40%  {
+    transform: scale(1.42);
+    color: var(--gold-hi);
+    text-shadow:
+      0 0 16px rgba(255,231,156,.95),
+      0 0 34px rgba(255,194,61,.8),
+      0 0 54px rgba(255,61,139,.45);
+  }
+  100% { transform: scale(1); }
+}
+/* Team-2 (blue) tick flashes blue rather than gold so the two scores stay read-distinct. */
+[data-theme="balatro"] .score-badge.team2 .score-num.bumping { animation: scoreSlamBlue .36s var(--spring); }
+@keyframes scoreSlamBlue {
+  0%   { transform: scale(1); }
+  40%  {
+    transform: scale(1.42);
+    color: #BFE6FF;
+    text-shadow:
+      0 0 16px rgba(191,230,255,.95),
+      0 0 34px rgba(47,168,255,.8),
+      0 0 54px rgba(255,61,139,.4);
+  }
+  100% { transform: scale(1); }
+}
+/* The whole badge gets a subtle neon seat so the payoff has somewhere to sit. */
+[data-theme="balatro"] .score-badge {
+  background: rgba(8,12,24,.5);
+  border-color: rgba(255,194,61,.32);
+  box-shadow: 0 0 calc(14px * var(--juice-k)) rgba(255,194,61,.18) inset;
+}
+[data-theme="balatro"] .score-badge.team2 {
+  border-color: rgba(47,168,255,.32);
+  box-shadow: 0 0 calc(14px * var(--juice-k)) rgba(47,168,255,.18) inset;
+}
+
+/* The big capture announce -- loud, juicy, reserved-red, springs in and rings.
+   Entrance is via the contract toggling .hidden; we animate on appearance with
+   a k-scaled glow and a spring pop. */
+[data-theme="balatro"] .shkobba-announce {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 1.9rem;
+  letter-spacing: .12em;
+  color: var(--haya);
+  text-shadow:
+    0 0 18px rgba(200,16,46,.75),
+    0 0 calc(40px * var(--juice-k)) rgba(255,61,139,.5),
+    0 2px 0 rgba(0,0,0,.5);
+  animation: announcePop .5s var(--spring);
+}
+@keyframes announcePop {
+  0%   { transform: translateX(-50%) scale(.4) rotate(-6deg); opacity: 0; }
+  55%  { transform: translateX(-50%) scale(1.14) rotate(2deg); opacity: 1; }
+  100% { transform: translateX(-50%) scale(1) rotate(0deg); opacity: 1; }
+}
+
+/* ============================================================================
+   CRT-LITE  — curved-tube scanline whisper + faint chromatic edges
+   Shown only when body.crt. Three quiet layers: horizontal scanlines, a soft
+   tube curvature (corner-darkening), and a barely-there RGB shadow-mask shimmer.
+   Tuned light so rank/suit never lose legibility. The animated mask drift is
+   k-scaled to opacity 0 at reduced motion.
+   ========================================================================== */
+[data-theme="balatro"] .fx-scanline {
+  background:
+    /* tube curvature: darken the corners as if behind curved glass */
+    radial-gradient(140% 120% at 50% 50%,
+      transparent 58%, rgba(0,0,0,.28) 100%),
+    /* horizontal scanlines */
+    repeating-linear-gradient(0deg,
+      rgba(0,0,0,0) 0 2px,
+      rgba(0,0,0,.16) 2px 3px);
+}
+/* Faint vertical RGB shadow-mask, drifting slowly. Single full-screen node, and
+   its opacity rides --juice-k so OS reduced-motion makes it disappear. */
+[data-theme="balatro"] body.crt .fx-scanline::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(90deg,
+    rgba(255,0,40,.05) 0 1px,
+    rgba(0,255,120,.05) 1px 2px,
+    rgba(40,120,255,.05) 2px 3px);
+  background-size: 3px 100%;
+  mix-blend-mode: screen;
+  opacity: calc(.5 * var(--juice-k));
+  animation: maskDrift 8s linear infinite;
+}
+@keyframes maskDrift {
+  0%   { background-position: 0 0; }
+  100% { background-position: 0 6px; }
+}
+
+/* ============================================================================
+   LIVING BACKDROP  — neon felt that breathes
+   Two drifting neon blooms (blue + magenta) plus a gold core. Each layer is a
+   single full-screen node; animation is background-position drift (cheap) and
+   the layer opacity is k-scaled so the stage is calm at reduced motion.
+   ========================================================================== */
 [data-theme="balatro"] .fx-glow {
   background:
-    radial-gradient(40% 30% at 32% 32%, rgba(43,214,196,.12), transparent 70%),
-    radial-gradient(40% 30% at 68% 38%, rgba(255,92,122,.12), transparent 70%);
+    radial-gradient(42% 34% at 30% 30%, rgba(47,168,255,.20), transparent 70%),
+    radial-gradient(42% 34% at 72% 36%, rgba(255,61,139,.18), transparent 70%),
+    radial-gradient(48% 38% at 50% 40%, rgba(255,194,61,.12), transparent 72%);
+  background-size: 180% 180%, 180% 180%, 140% 140%;
+  background-position: 0% 0%, 100% 0%, 50% 50%;
+  opacity: calc(.5 + .5 * var(--juice-k));
+  animation: neonDrift 16s var(--ease-out) infinite alternate;
 }
-[data-theme="balatro"] .score-num { text-shadow: 0 0 14px rgba(255,194,61,.5); }
-[data-theme="balatro"] .brand-mark { color: var(--gold-hi); text-shadow: 0 0 22px rgba(255,194,61,.6); }
+/* Deltas are k-scaled so at k=0 both endpoints collapse to the start = no drift,
+   while the opacity floor keeps the resting neon bloom visible. */
+@keyframes neonDrift {
+  0%   { background-position: 0% 0%, 100% 0%, 50% 50%; }
+  100% {
+    background-position:
+      calc(18% * var(--juice-k)) calc(22% * var(--juice-k)),
+      calc(100% - 22% * var(--juice-k)) calc(14% * var(--juice-k)),
+      calc(50% + 6% * var(--juice-k)) calc(50% - 6% * var(--juice-k));
+  }
+}
+
+/* A thin neon hairline under the header to seat the arcade chrome. */
+[data-theme="balatro"] #game-header {
+  border-bottom-color: rgba(47,168,255,.3);
+  box-shadow: 0 1px 0 rgba(255,61,139,.18);
+}
+
+/* ============================================================================
+   CHROME POLISH  — wordmark, turn indicator, buttons, deck/opponents
+   ========================================================================== */
+[data-theme="balatro"] .brand-mark {
+  color: var(--gold-hi);
+  text-shadow:
+    0 0 8px rgba(255,194,61,.7),
+    0 0 calc(26px * var(--juice-k)) rgba(255,61,139,.4);
+}
+[data-theme="balatro"] .turn-live { color: var(--gold-hi); }
+[data-theme="balatro"] .turn-live::before {
+  background: var(--accent-2);
+  box-shadow: 0 0 12px rgba(255,61,139,.8);
+}
+
+[data-theme="balatro"] .btn-action {
+  color: var(--gold-hi);
+  border-color: var(--gold);
+  background: linear-gradient(180deg, rgba(255,194,61,.18), rgba(255,61,139,.06));
+  text-shadow: 0 0 8px rgba(255,194,61,.4);
+}
+[data-theme="balatro"] .btn-action:hover {
+  box-shadow:
+    0 0 calc(22px * var(--juice-k)) rgba(255,194,61,.55),
+    0 0 0 1px var(--gold-hi);
+  background: linear-gradient(180deg, rgba(255,194,61,.28), rgba(255,61,139,.12));
+}
+
+[data-theme="balatro"] .opponent-info.active-turn {
+  border-color: var(--accent);
+  box-shadow: 0 0 calc(20px * var(--juice-k)) rgba(47,168,255,.45);
+}
+[data-theme="balatro"] .room-badge {
+  border-color: rgba(47,168,255,.35);
+  color: var(--accent);
+}
+
+/* Lab CTA buttons (scoped) get the gold->magenta arcade gradient. */
+[data-theme="balatro"] .lab-cta:not(.lab-cta--ghost) {
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold) 60%, #FF9A4D);
+  color: #14060a;
+}
+[data-theme="balatro"] .lab-cta:not(.lab-cta--ghost):hover {
+  box-shadow: 0 0 calc(22px * var(--juice-k)) rgba(255,194,61,.6);
+}
+
+/* Card back: a neon-seated version of the indigo lattice with a gold core mark. */
+[data-theme="balatro"] .card-back {
+  box-shadow: var(--card-shadow), 0 0 0 1px rgba(47,168,255,.25) inset;
+}
+[data-theme="balatro"] .card-back::after {
+  border-color: rgba(255,231,156,.55);
+  box-shadow: 0 0 10px rgba(255,194,61,.3);
+}
+
+/* ============================================================================
+   REDUCED-MOTION FAIL-SAFE
+   Every animated rule above is k-scaled, so OS reduced-motion (which sets
+   --juice-k:0) renders all of it inert on its own. This block only hardens the
+   explicit body.reduce toggle: the contract's global `body.reduce *` already
+   nulls animation, so here we just settle the foil's pointer-tracked position
+   back to a neutral resting frame. Note: .reduce and the theme attribute live on
+   the SAME <body>, so this must be a COMPOUND selector (no descendant space). */
+body.reduce[data-theme="balatro"] .card__holo {
+  animation: none;
+  background-position: 0 0, 50% 50%;
+}
