@@ -345,30 +345,32 @@ button { font: inherit; color: inherit; cursor: pointer; border: none; backgroun
 }
 .card__watermark svg { width: 64%; height: 64%; fill: var(--suit-color); }
 
-/* holographic sheen + specular glare (the Balatro layer) */
+/* sheen + specular glare. The CONTRACT default is a soft warm light-catch that
+   tracks the pointer (a "glossy card", not a rainbow): screen brightens the
+   light ivory face gently, where color-dodge of a rainbow would clip to white
+   and lose all hue. The full holographic foil is a Balatro signature and lives
+   in themes/balatro.css, which overrides .card__holo wholesale. */
 .card__holo {
   position: absolute; inset: 0; border-radius: inherit;
-  background:
-    linear-gradient(115deg,
-      transparent 18%,
-      rgba(255,120,180,.55) 33%,
-      rgba(120,210,255,.45) 45%,
-      rgba(140,255,170,.5) 56%,
-      rgba(255,225,120,.5) 67%,
-      transparent 82%);
+  background: linear-gradient(105deg,
+    transparent 32%,
+    rgba(255,246,224,.45) 47%,
+    rgba(255,255,255,.6) 50%,
+    rgba(255,246,224,.45) 53%,
+    transparent 68%);
   background-size: 220% 220%;
   background-position: var(--mx) var(--my);
-  mix-blend-mode: color-dodge;
-  opacity: calc(var(--holo) * var(--juice-k));
+  mix-blend-mode: screen;
+  opacity: calc(var(--holo) * var(--juice-k) * .55);
   transition: opacity .2s var(--ease-out);
   pointer-events: none;
 }
 .card__glare {
   position: absolute; inset: 0; border-radius: inherit;
-  background: radial-gradient(120px 120px at var(--mx) var(--my),
-    rgba(255,255,255,.5), rgba(255,255,255,0) 60%);
+  background: radial-gradient(110px 110px at var(--mx) var(--my),
+    rgba(255,250,235,.42), rgba(255,255,255,0) 62%);
   mix-blend-mode: screen;
-  opacity: calc(var(--holo) * var(--juice-k) * .9);
+  opacity: calc(var(--holo) * var(--juice-k) * .8);
   transition: opacity .2s var(--ease-out);
   pointer-events: none;
 }
