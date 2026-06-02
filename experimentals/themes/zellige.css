@@ -1,0 +1,52 @@
+/* ============================================================================
+   THEME — Zellige Midnight  (Tunisia-forward)
+   Dark indigo felt, coin-gold + terracotta, a Kairouan 8-point-star tile in the
+   backdrop and card backs, شكوبة wordmark prominent. Warmer, ornamental — the
+   cultural pick. Themer owns this file only; contract lives in shared/*.
+   ========================================================================== */
+[data-theme="zellige"] {
+  --font-display: 'Cinzel', Georgia, serif;
+
+  --bg:    #0C1424;
+  --bg-2:  #0F1A2E;
+  --felt:  radial-gradient(130% 130% at 50% 24%, #16335a 0%, #102545 52%, #0a1426 100%);
+  --felt-edge: rgba(4,8,18,.66);
+
+  --text:     #F2E8CF;
+  --text-dim: rgba(242,232,207,.66);
+  --text-mut: rgba(242,232,207,.4);
+
+  --gold:    #D6A93E;
+  --gold-lo: #93701F;
+  --gold-hi: #F2D98A;
+  --accent:   #2E84B8;   /* Sidi Bou Saïd blue, lifted */
+  --accent-2: #CE6A2C;   /* terracotta */
+
+  --card-face:  linear-gradient(160deg, #F7EFD7 0%, #F0E4C4 58%, #E7D6AE 100%);
+  --card-edge:  rgba(20,40,70,.34);
+  --card-red:   #BE3A2C;
+  --card-ink:   #1B3252;
+  --card-back:
+    radial-gradient(circle at 50% 50%, rgba(214,169,62,.22) 0 18%, transparent 19%),
+    repeating-linear-gradient(45deg, #133157 0 10px, #0f2848 10px 20px);
+  --card-back-ink: var(--gold);
+
+  --panel-edge: rgba(214,169,62,.26);
+  --glow-gold:  0 0 18px rgba(214,169,62,.45);
+}
+
+/* 8-point-star zellige tile, very subtle, breathing across the felt */
+[data-theme="zellige"] #game-board {
+  background-image:
+    radial-gradient(circle, transparent 68%, rgba(46,132,184,.05) 70%),
+    var(--felt);
+  background-size: 64px 64px, cover;
+}
+[data-theme="zellige"] .fx-glow {
+  background: radial-gradient(46% 36% at 50% 32%, rgba(214,169,62,.14), transparent 70%);
+}
+[data-theme="zellige"] .brand-mark {
+  font-size: 1.95rem; color: var(--gold-hi);
+  text-shadow: 0 0 20px rgba(214,169,62,.5);
+}
+[data-theme="zellige"] .player-label { color: var(--accent); }

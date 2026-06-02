@@ -1,0 +1,50 @@
+/* ============================================================================
+   THEME — Balatro Max  (feel-dominant)
+   Juice cranked: strong holographic cards, CRT-lite whisper, count-up theater,
+   bolder neon-on-dark contrast. The "fun" pick. Themer owns this file only.
+   ========================================================================== */
+[data-theme="balatro"] {
+  --font-display: 'Cinzel', Georgia, serif;
+  --font-num:     'Oswald', sans-serif;
+
+  --bg:    #0A0E16;
+  --bg-2:  #0E1322;
+  --felt:  radial-gradient(120% 120% at 50% 30%, #1d2742 0%, #121a30 55%, #080b14 100%);
+  --felt-edge: rgba(2,4,10,.72);
+
+  --text:     #F4ECDA;
+  --text-dim: rgba(244,236,218,.66);
+  --text-mut: rgba(244,236,218,.4);
+
+  --gold:    #FFC23D;
+  --gold-lo: #B07E1C;
+  --gold-hi: #FFE08A;
+  --accent:   #2BD6C4;   /* electric teal */
+  --accent-2: #FF5C7A;   /* hot pink */
+
+  --card-face:  linear-gradient(160deg, #FBF4E2 0%, #F3E8CC 60%, #ECDCB6 100%);
+  --card-edge:  rgba(10,14,22,.4);
+  --card-red:   #E23B5A;
+  --card-ink:   #1A2233;
+  --card-shadow: 0 8px 20px rgba(0,0,0,.55), 0 0 0 1px rgba(255,194,61,.2) inset;
+  --card-back:  repeating-linear-gradient(45deg, #b21d3a 0 9px, #7a142a 9px 18px);
+  --card-back-ink: var(--gold-hi);
+
+  --panel-edge: rgba(255,194,61,.28);
+  --glow-gold:  0 0 22px rgba(255,194,61,.6);
+
+  /* punchier motion + stronger sheen baseline */
+  --spring: cubic-bezier(.34, 1.8, .5, 1);
+}
+
+/* every card carries a faint always-on holo; hover blows it out */
+[data-theme="balatro"] .card .card__holo { opacity: calc(.12 * var(--juice-k)); }
+[data-theme="balatro"] .card.is-interactive:hover .card__holo { opacity: calc(1 * var(--juice-k)); }
+
+[data-theme="balatro"] .fx-glow {
+  background:
+    radial-gradient(40% 30% at 32% 32%, rgba(43,214,196,.12), transparent 70%),
+    radial-gradient(40% 30% at 68% 38%, rgba(255,92,122,.12), transparent 70%);
+}
+[data-theme="balatro"] .score-num { text-shadow: 0 0 14px rgba(255,194,61,.5); }
+[data-theme="balatro"] .brand-mark { color: var(--gold-hi); text-shadow: 0 0 22px rgba(255,194,61,.6); }

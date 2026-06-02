@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chkoba — UI Lab</title>
+  <meta name="description" content="Experimental visual-identity lab for Chkoba. One board, swappable themes, configurable juice.">
+
+  <!-- Neutral default type stack. Themes may override via their own @font-face / links.
+       Display = Cinzel (incised, art-deco). Numbers = Oswald (condensed grotesque).
+       Body = Alegreya Sans. Wordmark شكوبة = Aref Ruqaa (Maghribi character). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;900&family=Oswald:wght@500;600;700&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=Aref+Ruqaa:wght@400;700&display=swap" rel="stylesheet">
+
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🃏</text></svg>">
+  <link rel="stylesheet" href="shared/base.css">
+  <!-- Active theme token set. config.js rewrites href to hot-swap themes. Default = noir. -->
+  <link id="theme-css" rel="stylesheet" href="themes/noir.css">
+</head>
+<body data-theme="noir" data-suitstyle="french" data-juice="70">
+
+  <!-- ================= THE BOARD =================
+       DOM contract mirrors the real game's #game-view (see ../index.html):
+       #game-header, #game-board, #table-cards, #hand-cards, and .card nodes
+       carry role="button" tabindex="0" aria-label so a winning theme ports 1:1. -->
+  <main id="game-view" class="view active" aria-label="Chkoba game board">
+
+    <div id="game-header">
+      <div class="header-left">
+        <span class="brand-mark" aria-hidden="true">شكوبة</span>
+        <span class="room-badge" id="game-room-code">Room CAFE</span>
+      </div>
+      <div class="header-center">
+        <span class="game-info">Round <span id="round-num">2</span>/<span id="round-total">3</span></span>
+        <span class="game-info" id="deck-display">Deck 18</span>
+        <span class="game-info turn-live" id="turn-display">Your turn</span>
+      </div>
+      <div class="header-right">
+        <span class="score-badge team1" id="score-t1"><span class="score-team">You</span><span class="score-num" id="score-t1-num">5</span></span>
+        <span class="score-badge team2" id="score-t2"><span class="score-team">Najib</span><span class="score-num" id="score-t2-num">3</span></span>
+      </div>
+    </div>
+
+    <div id="game-board">
+      <div id="opponents-top" class="opponents-row"></div>
+
+      <div id="play-area">
+        <div id="table-area">
+          <div id="table-deck" class="deck-pile"></div>
+          <div class="table-center">
+            <div id="table-cards" class="card-row" aria-label="Cards on the table"></div>
+            <div id="table-msg" class="table-message"></div>
+            <div id="shkobba-announce" class="shkobba-announce hidden">Shkobba!</div>
+          </div>
+        </div>
+
+        <div id="hand-area">
+          <div id="player-label" class="player-label">Your hand</div>
+          <div id="my-captured" class="my-captured"></div>
+          <div id="hand-cards" class="card-row" aria-label="Your hand"></div>
+          <div id="hand-actions" class="hand-actions">
+            <button id="btn-replay" class="btn-action" type="button">Replay capture</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Living-backdrop layers; purely decorative, painted by themes. -->
+    <div class="stage-fx" aria-hidden="true">
+      <div class="fx-vignette"></div>
+      <div class="fx-grain"></div>
+      <div class="fx-scanline"></div>
+      <div class="fx-glow"></div>
+    </div>
+  </main>
+
+  <!-- ================= CONTROL PANEL ================= -->
+  <button id="panel-toggle" type="button" aria-expanded="true" aria-controls="lab-panel" title="Toggle controls">⚙</button>
+
+  <aside id="lab-panel" aria-label="Theme and juice controls">
+    <header class="lab-panel__head">
+      <h1>Chkoba <span>UI Lab</span></h1>
+      <p class="lab-panel__sub">One board · swappable skins · tunable juice</p>
+    </header>
+
+    <section class="lab-group">
+      <h2>Theme</h2>
+      <div class="seg" id="seg-theme" role="radiogroup" aria-label="Theme">
+        <button role="radio" data-theme="noir"     aria-checked="false">Noir Deco</button>
+        <button role="radio" data-theme="zellige"  aria-checked="false">Zellige</button>
+        <button role="radio" data-theme="balatro"  aria-checked="false">Balatro Max</button>
+      </div>
+    </section>
+
+    <section class="lab-group">
+      <h2>Juice <output id="juice-val">70</output></h2>
+      <input type="range" id="ctl-juice" min="0" max="100" value="70" aria-label="Juice intensity">
+      <p class="lab-hint">hover-lift · tilt · holo sheen · count-up · shake</p>
+    </section>
+
+    <section class="lab-group">
+      <h2>Suit style</h2>
+      <div class="seg" id="seg-suit" role="radiogroup" aria-label="Suit style">
+        <button role="radio" data-suit="french" aria-checked="true">French ♦</button>
+        <button role="radio" data-suit="coin"   aria-checked="false">Coins دينار</button>
+      </div>
+    </section>
+
+    <section class="lab-group lab-group--toggles">
+      <label class="sw"><input type="checkbox" id="ctl-crt"><span>CRT scanlines</span></label>
+      <label class="sw"><input type="checkbox" id="ctl-grain" checked><span>Film grain</span></label>
+      <label class="sw"><input type="checkbox" id="ctl-reduce"><span>Reduced motion</span></label>
+    </section>
+
+    <section class="lab-group">
+      <button id="ctl-replay" class="lab-cta" type="button">▶ Play capture</button>
+      <button id="ctl-shuffle" class="lab-cta lab-cta--ghost" type="button">↻ Re-deal</button>
+    </section>
+
+    <footer class="lab-panel__foot">
+      <span id="fps-meter">—</span>
+      <a href="DESIGN_DIRECTION.md">direction ↗</a>
+    </footer>
+  </aside>
+
+  <script src="shared/mock-state.js"></script>
+  <script src="shared/board.js"></script>
+  <script src="shared/juice.js"></script>
+  <script src="shared/config.js"></script>
+</body>
+</html>

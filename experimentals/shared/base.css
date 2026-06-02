@@ -1,0 +1,617 @@
+/* ============================================================================
+   Chkoba UI Lab — base.css
+   Structure + the full token contract. Themes (themes/*.css) only re-declare the
+   custom properties in the ":root TOKEN CONTRACT" block below and paint the
+   decorative FX layers. No theme should need to touch layout or the card markup.
+   ========================================================================== */
+
+/* ---------- reset ---------- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+button { font: inherit; color: inherit; cursor: pointer; border: none; background: none; }
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+/* ============================================================================
+   :root TOKEN CONTRACT  — neutral fallbacks. Themes override these.
+   ========================================================================== */
+:root {
+  /* type */
+  --font-display: 'Cinzel', Georgia, serif;
+  --font-num:     'Oswald', 'Cinzel', sans-serif;
+  --font-body:    'Alegreya Sans', system-ui, sans-serif;
+  --font-arabic:  'Aref Ruqaa', serif;
+
+  /* stage surfaces */
+  --bg:        #0E1418;
+  --bg-2:      #141C1E;
+  --felt:      radial-gradient(120% 120% at 50% 30%, #1C2A2C 0%, #121A1C 60%, #0C1214 100%);
+  --felt-edge: rgba(0,0,0,.55);
+
+  /* ink / text */
+  --text:     #F2E8CF;
+  --text-dim: rgba(242,232,207,.62);
+  --text-mut: rgba(242,232,207,.38);
+
+  /* accents */
+  --gold:    #C9A24B;
+  --gold-lo: #8A6D2C;
+  --gold-hi: #EAD08A;
+  --accent:    #1E5A8A;   /* Sidi Bou Saïd indigo */
+  --accent-2:  #C8642D;   /* Kairouan/Nabeul clay */
+  --haya:      #C8102E;   /* RESERVED: sabʿa l-ḥayya + win states only */
+
+  /* cards */
+  --card-w:      clamp(64px, 8.2vw, 96px);
+  --card-h:      calc(var(--card-w) * 1.42);
+  --card-radius: 9px;
+  --card-face:   linear-gradient(160deg, #F6EFDC 0%, #EFE5C8 55%, #E6D8B4 100%);
+  --card-edge:   rgba(40,30,12,.30);
+  --card-shadow: 0 6px 14px rgba(0,0,0,.45), 0 1px 0 rgba(255,255,255,.35) inset;
+  --card-red:    #C0392B;   /* French red suits on paper */
+  --card-ink:    #232B2E;   /* French dark suits on paper */
+  --card-back:   repeating-linear-gradient(45deg, #163A52 0 8px, #12314a 8px 16px);
+  --card-back-ink: var(--gold);
+
+  /* per-suit fill (set on each .card via [data-suit]; see SUIT MAP) */
+  --suit-color: var(--card-ink);
+
+  /* grain texture (fractal noise) — themes may override */
+  --grain-url: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+
+  /* framing / glow */
+  --panel:      rgba(14,20,24,.92);
+  --panel-edge: rgba(201,162,75,.22);
+  --ring:       0 0 0 1px var(--panel-edge);
+  --glow-haya:  0 0 22px rgba(200,16,46,.55);
+  --glow-gold:  0 0 18px rgba(201,162,75,.45);
+
+  /* motion */
+  --juice-k:  .7;                                    /* 0..1, driven by JS */
+  --spring:   cubic-bezier(.34, 1.56, .64, 1);       /* overshoot + settle */
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --lift:     calc(-14px * var(--juice-k));
+  --tilt-max: calc(10deg * var(--juice-k));
+}
+
+/* ============================================================================
+   VIEW / BOARD LAYOUT  (mirrors the real game's #game-view)
+   ========================================================================== */
+.view { display: none; }
+.view.active { display: flex; }
+.hidden { display: none !important; }
+
+#game-view {
+  position: relative;
+  flex-direction: column;
+  width: 100%; height: 100%;
+  background: var(--bg);
+  isolation: isolate;
+}
+
+/* ---- header ---- */
+#game-header {
+  position: relative; z-index: 3;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; padding: .6rem 1.1rem;
+  background: linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,0));
+  border-bottom: 1px solid var(--panel-edge);
+}
+.header-left, .header-right { display: flex; align-items: center; gap: .7rem; }
+.header-center { display: flex; align-items: center; gap: 1.1rem; }
+
+.brand-mark {
+  font-family: var(--font-arabic);
+  font-size: 1.7rem; line-height: 1;
+  color: var(--gold);
+  text-shadow: var(--glow-gold);
+  padding-right: .2rem;
+}
+.room-badge {
+  font-family: var(--font-num);
+  font-size: .72rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--text-dim);
+  border: 1px solid var(--panel-edge); border-radius: 999px;
+  padding: .18rem .6rem;
+}
+.game-info {
+  font-family: var(--font-num);
+  font-size: .82rem; letter-spacing: .06em;
+  color: var(--text-dim);
+}
+.turn-live {
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(201,162,75,.4);
+}
+.turn-live::before {
+  content: ""; display: inline-block;
+  width: 7px; height: 7px; margin-right: .4rem;
+  border-radius: 50%; background: var(--gold);
+  box-shadow: var(--glow-gold);
+  animation: pulse 1.8s var(--ease-out) infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+.score-badge {
+  display: flex; flex-direction: column; align-items: center; line-height: 1;
+  min-width: 56px; padding: .3rem .6rem;
+  border: 1px solid var(--panel-edge); border-radius: 8px;
+  background: rgba(0,0,0,.25);
+}
+.score-team {
+  font-family: var(--font-num);
+  font-size: .58rem; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--text-mut);
+}
+.score-num {
+  font-family: var(--font-num); font-weight: 700;
+  font-size: 1.35rem; color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+.score-badge.team2 .score-num { color: var(--accent); }
+
+/* ---- board ---- */
+#game-board {
+  position: relative; z-index: 2;
+  flex: 1; display: flex; flex-direction: column;
+  min-height: 0;
+  background: var(--felt);
+}
+#opponents-top {
+  display: flex; justify-content: center; gap: 1rem;
+  padding: .6rem 0 .2rem;
+  min-height: 0;
+}
+#play-area {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: clamp(.8rem, 3vh, 2rem); min-height: 0;
+  padding: .5rem 1rem;
+}
+
+/* opponent chip */
+.opponent-info {
+  display: flex; flex-direction: column; align-items: center; gap: .25rem;
+  padding: .5rem .9rem; border-radius: 12px;
+  background: rgba(0,0,0,.3); border: 1px solid transparent;
+  transition: border-color .3s, box-shadow .3s;
+}
+.opponent-info.active-turn {
+  border-color: var(--gold);
+  box-shadow: var(--glow-gold);
+}
+.opponent-info .name {
+  font-family: var(--font-display); font-weight: 600;
+  font-size: .82rem; letter-spacing: .04em; color: var(--text);
+}
+.opponent-info .card-count { font-family: var(--font-num); font-size: .68rem; color: var(--text-dim); }
+.captured-row { display: flex; align-items: center; gap: .5rem; }
+.captured-pile { display: flex; }
+.captured-label { font-family: var(--font-num); font-size: .72rem; color: var(--gold); }
+
+/* ---- table ---- */
+#table-area {
+  position: relative;
+  display: flex; align-items: center; gap: clamp(.8rem, 3vw, 2.2rem);
+}
+.deck-pile {
+  position: relative; width: var(--card-w); height: var(--card-h);
+  display: grid; place-items: center; flex: none;
+}
+.deck-count {
+  position: absolute; inset: auto 0 -1.3rem 0; text-align: center;
+  font-family: var(--font-num); font-size: .68rem; color: var(--text-dim);
+}
+.table-center { position: relative; display: flex; flex-direction: column; align-items: center; gap: .5rem; }
+
+.card-row {
+  display: flex; align-items: center; justify-content: center;
+  gap: clamp(.3rem, 1.2vw, .8rem);
+  flex-wrap: wrap; max-width: min(92vw, 760px);
+}
+#hand-cards { gap: clamp(.4rem, 1.4vw, 1rem); }
+
+.table-message {
+  font-family: var(--font-display); font-size: .8rem; letter-spacing: .08em;
+  color: var(--text-dim); min-height: 1.1em; text-align: center;
+}
+.shkobba-announce {
+  position: absolute; top: -2.2rem; left: 50%; transform: translateX(-50%);
+  font-family: var(--font-display); font-weight: 900;
+  font-size: 1.5rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--haya); text-shadow: var(--glow-haya);
+}
+
+/* ---- hand ---- */
+#hand-area {
+  position: relative; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; gap: .4rem;
+  padding: .4rem 1rem 1rem;
+}
+.player-label {
+  font-family: var(--font-display); font-size: .72rem;
+  letter-spacing: .22em; text-transform: uppercase; color: var(--text-mut);
+}
+.my-captured {
+  display: flex; align-items: center; gap: .4rem;
+  font-family: var(--font-num); font-size: .72rem; color: var(--text-dim);
+  min-height: 1.2rem;
+}
+.hand-actions { display: flex; gap: .6rem; margin-top: .2rem; }
+.btn-action {
+  font-family: var(--font-display); font-size: .74rem;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--gold);
+  padding: .42rem 1rem; border-radius: 8px;
+  border: 1px solid var(--gold-lo);
+  background: linear-gradient(180deg, rgba(201,162,75,.14), rgba(201,162,75,.04));
+  transition: transform .18s var(--spring), box-shadow .25s, background .25s;
+}
+.btn-action:hover { transform: translateY(-2px); box-shadow: var(--glow-gold); background: rgba(201,162,75,.2); }
+.btn-action:active { transform: translateY(0) scale(.97); }
+
+/* ============================================================================
+   CARD COMPONENT
+   Outer .card = the contract node (role/tabindex/aria-label live here, added by
+   board.js). .card__inner is the 3D tilt target. Faces are CSS/SVG so suits
+   recolor, the French↔coin swap works, and the holo layer has something to live
+   on — none of which a flat <img> allows.
+   ========================================================================== */
+.card {
+  position: relative;
+  width: var(--card-w); height: var(--card-h);
+  perspective: 760px;
+  flex: none;
+  border-radius: var(--card-radius);
+  --rx: 0deg; --ry: 0deg; --lift-now: 0px; --scale: 1; --mx: 50%; --my: 50%; --holo: 0;
+}
+.card__inner {
+  position: absolute; inset: 0;
+  transform-style: preserve-3d;
+  border-radius: inherit;
+  background: var(--card-face);
+  box-shadow: var(--card-shadow);
+  border: 1px solid var(--card-edge);
+  transform:
+    translateY(var(--lift-now))
+    scale(var(--scale))
+    rotateX(var(--rx)) rotateY(var(--ry));
+  transition:
+    transform .26s var(--spring),
+    box-shadow .26s var(--ease-out);
+  will-change: transform;
+  overflow: hidden;
+}
+.card__face {
+  position: absolute; inset: 0;
+  padding: 6% 7%;
+  color: var(--suit-color);
+  backface-visibility: hidden;
+}
+
+/* corner index (rank + small pip), top-left + bottom-right (rotated) */
+.card__corner {
+  position: absolute; display: flex; flex-direction: column; align-items: center;
+  line-height: .9; gap: 1px;
+}
+.card__corner--tl { top: 5%; left: 7%; }
+.card__corner--br { bottom: 5%; right: 7%; transform: rotate(180deg); }
+.card__rank {
+  font-family: var(--font-num); font-weight: 700;
+  font-size: calc(var(--card-w) * .24);
+  font-variant-numeric: tabular-nums;
+  color: var(--suit-color);
+}
+.card__corner .pip { width: calc(var(--card-w) * .15); height: calc(var(--card-w) * .15); }
+
+/* center pip grid / emblem */
+.card__center {
+  position: absolute; inset: 16% 14%;
+  display: block;
+}
+.pip {
+  position: absolute; width: calc(var(--card-w) * .2); height: calc(var(--card-w) * .2);
+  transform: translate(-50%, -50%);
+  color: var(--suit-color);
+}
+.pip svg, .card__corner .pip svg { width: 100%; height: 100%; display: block; fill: currentColor; }
+.pip.flip { transform: translate(-50%, -50%) rotate(180deg); }
+
+/* court emblem (J/Q/K) — typographic, not portrait art */
+.card__court {
+  position: absolute; inset: 16% 12%;
+  display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--suit-color) 45%, transparent);
+  border-radius: 6px;
+}
+.card__court span {
+  font-family: var(--font-display); font-weight: 900;
+  font-size: calc(var(--card-w) * .5);
+  color: var(--suit-color);
+}
+.card__court .court-suit { position: absolute; bottom: 8%; width: 26%; height: 26%; }
+
+/* big single emblem for the suit watermark behind courts */
+.card__watermark {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  opacity: .07; pointer-events: none;
+}
+.card__watermark svg { width: 64%; height: 64%; fill: var(--suit-color); }
+
+/* holographic sheen + specular glare (the Balatro layer) */
+.card__holo {
+  position: absolute; inset: 0; border-radius: inherit;
+  background:
+    linear-gradient(115deg,
+      transparent 18%,
+      rgba(255,120,180,.55) 33%,
+      rgba(120,210,255,.45) 45%,
+      rgba(140,255,170,.5) 56%,
+      rgba(255,225,120,.5) 67%,
+      transparent 82%);
+  background-size: 220% 220%;
+  background-position: var(--mx) var(--my);
+  mix-blend-mode: color-dodge;
+  opacity: calc(var(--holo) * var(--juice-k));
+  transition: opacity .2s var(--ease-out);
+  pointer-events: none;
+}
+.card__glare {
+  position: absolute; inset: 0; border-radius: inherit;
+  background: radial-gradient(120px 120px at var(--mx) var(--my),
+    rgba(255,255,255,.5), rgba(255,255,255,0) 60%);
+  mix-blend-mode: screen;
+  opacity: calc(var(--holo) * var(--juice-k) * .9);
+  transition: opacity .2s var(--ease-out);
+  pointer-events: none;
+}
+
+/* hover / selected states (gated by reduced-motion via --juice-k → 0) */
+.card.is-interactive { cursor: pointer; }
+.card.is-interactive:hover { --lift-now: var(--lift); --scale: calc(1 + .05 * var(--juice-k)); --holo: 1; z-index: 5; }
+.card.is-interactive:hover .card__inner {
+  box-shadow: 0 calc(18px + 10px * var(--juice-k)) calc(26px + 12px * var(--juice-k)) rgba(0,0,0,.5),
+              0 0 0 1px var(--gold-lo);
+}
+.card.selected { --lift-now: calc(var(--lift) * 1.4); --scale: calc(1 + .07 * var(--juice-k)); }
+.card.selected .card__inner { box-shadow: 0 18px 30px rgba(0,0,0,.55), 0 0 0 2px var(--gold), var(--glow-gold); }
+
+/* prestige: the sabʿa l-ḥayya always shimmers + wears the reserved red ring */
+.card.is-haya .card__inner { box-shadow: var(--card-shadow), 0 0 0 1.5px var(--haya), var(--glow-haya); }
+.card.is-haya .card__holo { opacity: calc(.35 * var(--juice-k)); animation: hayaSheen 4.5s linear infinite; }
+@keyframes hayaSheen {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+/* idle breath — per-card random phase set inline by board.js */
+.card.idle .card__inner { animation: breathe calc(5s + var(--phase, 0) * 2s) var(--ease-out) calc(var(--phase, 0) * -3s) infinite; }
+@keyframes breathe {
+  0%,100% { transform: translateY(0) rotateZ(0deg); }
+  50%     { transform: translateY(calc(-2px * var(--juice-k))) rotateZ(calc(.4deg * var(--juice-k))); }
+}
+/* breath is suppressed while hovering/selected so it doesn't fight the tilt */
+.card.is-interactive:hover.idle .card__inner,
+.card.selected.idle .card__inner { animation: none; }
+
+/* capture flight (driven by juice.js with CSS custom props for the vector) */
+.card.flying {
+  position: fixed; z-index: 60; pointer-events: none;
+  transition: transform .55s var(--spring), opacity .55s var(--ease-out);
+}
+
+/* card back */
+.card-back {
+  width: var(--card-w); height: var(--card-h); border-radius: var(--card-radius);
+  background: var(--card-back);
+  border: 1px solid var(--card-edge);
+  box-shadow: var(--card-shadow);
+  position: relative; overflow: hidden;
+}
+.card-back::after {
+  content: ""; position: absolute; inset: 12%;
+  border: 1px solid color-mix(in srgb, var(--card-back-ink) 50%, transparent);
+  border-radius: 5px;
+}
+.card-back.mini { width: 22px; height: 31px; border-radius: 4px; }
+.card-back.mini::after { inset: 3px; border-radius: 2px; }
+
+/* ============================================================================
+   STAGE FX  (decorative; themes paint, toggles gate)
+   ========================================================================== */
+.stage-fx { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.fx-vignette { position: absolute; inset: 0;
+  background: radial-gradient(120% 90% at 50% 42%, transparent 52%, var(--felt-edge) 100%);
+}
+.fx-glow { position: absolute; inset: 0;
+  background: radial-gradient(45% 35% at 50% 38%, rgba(201,162,75,.10), transparent 70%);
+  animation: stageBreath 9s var(--ease-out) infinite;
+}
+@keyframes stageBreath { 0%,100% { opacity: .6; } 50% { opacity: 1; } }
+.fx-grain { position: absolute; inset: -50%;
+  background-image: var(--grain-url, none);
+  opacity: .05; mix-blend-mode: overlay;
+  animation: grainShift 1.2s steps(4) infinite;
+}
+@keyframes grainShift {
+  0%{transform:translate(0,0)} 25%{transform:translate(-3%,2%)}
+  50%{transform:translate(2%,-2%)} 75%{transform:translate(-2%,-1%)} 100%{transform:translate(0,0)}
+}
+.fx-scanline { position: absolute; inset: 0; opacity: 0;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,.0) 0 2px, rgba(0,0,0,.22) 2px 3px);
+  transition: opacity .3s;
+}
+body.crt .fx-scanline { opacity: 1; }
+body.no-grain .fx-grain { display: none; }
+
+/* screen shake (juice.js sets --shake amplitude) */
+@keyframes shake {
+  0%,100% { transform: translate(0,0); }
+  20% { transform: translate(calc(var(--shake,4px) * -1), calc(var(--shake,4px) * .6)); }
+  40% { transform: translate(var(--shake,4px), calc(var(--shake,4px) * -.5)); }
+  60% { transform: translate(calc(var(--shake,4px) * -.7), 0); }
+  80% { transform: translate(calc(var(--shake,4px) * .5), calc(var(--shake,4px) * .4)); }
+}
+#game-board.shaking { animation: shake .4s var(--ease-out); }
+
+/* score bounce on count-up */
+.score-num.bumping { animation: scoreBump .32s var(--spring); }
+@keyframes scoreBump {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.32); color: var(--gold-hi); text-shadow: var(--glow-gold); }
+  100% { transform: scale(1); }
+}
+
+/* ============================================================================
+   SUIT MAP — per-suit fill. French on paper = red/ink; coin style re-maps to
+   the heritage Latin suits (coins/cups/swords/batons).
+   ========================================================================== */
+.card[data-suit="diamonds"], .card[data-suit="hearts"] { --suit-color: var(--card-red); }
+.card[data-suit="clubs"],    .card[data-suit="spades"] { --suit-color: var(--card-ink); }
+.card.is-haya { --suit-color: var(--haya); }
+
+[data-suitstyle="coin"] .card[data-suit="diamonds"] { --suit-color: var(--gold); }     /* coins / dīnārī */
+[data-suitstyle="coin"] .card[data-suit="hearts"]   { --suit-color: var(--accent); }   /* cups */
+[data-suitstyle="coin"] .card[data-suit="spades"]   { --suit-color: #6E7E85; }          /* swords */
+[data-suitstyle="coin"] .card[data-suit="clubs"]    { --suit-color: var(--accent-2); } /* batons */
+
+/* reduced motion — global kill switch (also set when the toggle is on) */
+@media (prefers-reduced-motion: reduce) { :root { --juice-k: 0; } }
+body.reduce * { animation: none !important; }
+body.reduce .card__inner { transition: box-shadow .2s; }
+
+/* ============================================================================
+   CONTROL PANEL  (the lab chrome — deliberately tool-like, not themed)
+   ========================================================================== */
+#lab-panel {
+  position: fixed; top: 0; right: 0; z-index: 40;
+  width: 286px; height: 100%;
+  display: flex; flex-direction: column; gap: .2rem;
+  padding: 1rem 1rem 1.2rem;
+  background: linear-gradient(180deg, #0c1216, #0a0f12);
+  border-left: 1px solid var(--panel-edge);
+  box-shadow: -18px 0 50px rgba(0,0,0,.5);
+  overflow-y: auto;
+  transition: transform .4s var(--ease-out);
+  font-family: var(--font-body);
+}
+body.panel-collapsed #lab-panel { transform: translateX(100%); }
+body.kiosk #lab-panel, body.kiosk #panel-toggle { display: none; }
+
+.lab-panel__head h1 {
+  font-family: var(--font-display); font-weight: 700;
+  font-size: 1.15rem; letter-spacing: .06em; color: var(--gold);
+}
+.lab-panel__head h1 span { color: var(--text-mut); font-weight: 500; }
+.lab-panel__sub { font-size: .7rem; color: var(--text-mut); margin-bottom: .4rem; }
+
+.lab-group { padding: .7rem 0; border-top: 1px solid rgba(201,162,75,.12); }
+.lab-group h2 {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-family: var(--font-num); font-weight: 600;
+  font-size: .68rem; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--text-dim); margin-bottom: .5rem;
+}
+.lab-group h2 output { font-family: var(--font-num); color: var(--gold); font-size: .9rem; }
+.lab-hint, .lab-panel__foot a { font-size: .64rem; color: var(--text-mut); }
+.lab-hint { margin-top: .4rem; line-height: 1.4; }
+
+.seg { display: flex; gap: 4px; }
+.seg button {
+  flex: 1; padding: .42rem .3rem; border-radius: 7px;
+  font-family: var(--font-num); font-size: .68rem; letter-spacing: .04em;
+  color: var(--text-dim);
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(201,162,75,.16);
+  transition: all .2s var(--ease-out);
+}
+.seg button:hover { color: var(--text); border-color: var(--gold-lo); }
+.seg button.on {
+  color: #0c1216; background: var(--gold);
+  border-color: var(--gold-hi); font-weight: 600;
+  box-shadow: var(--glow-gold);
+}
+
+input[type="range"] {
+  width: 100%; height: 4px; -webkit-appearance: none; appearance: none;
+  background: linear-gradient(90deg, var(--gold) 0%, var(--gold-lo) 100%);
+  border-radius: 999px; outline-offset: 4px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--gold-hi); border: 2px solid #0c1216; cursor: pointer;
+  box-shadow: var(--glow-gold);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--gold-hi); border: 2px solid #0c1216; cursor: pointer;
+}
+
+.lab-group--toggles { display: flex; flex-direction: column; gap: .55rem; }
+.sw { display: flex; align-items: center; gap: .6rem; cursor: pointer;
+  font-size: .76rem; color: var(--text-dim); }
+.sw input { appearance: none; -webkit-appearance: none;
+  width: 34px; height: 18px; border-radius: 999px; flex: none;
+  background: rgba(255,255,255,.1); position: relative; cursor: pointer;
+  transition: background .2s; }
+.sw input::after { content: ""; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%; background: var(--text-dim);
+  transition: transform .2s var(--spring), background .2s; }
+.sw input:checked { background: rgba(201,162,75,.4); }
+.sw input:checked::after { transform: translateX(16px); background: var(--gold-hi); }
+
+.lab-cta {
+  width: 100%; margin-bottom: .5rem; padding: .6rem;
+  font-family: var(--font-display); font-size: .76rem;
+  letter-spacing: .12em; text-transform: uppercase; color: #0c1216;
+  background: linear-gradient(180deg, var(--gold-hi), var(--gold));
+  border-radius: 8px; font-weight: 700;
+  transition: transform .18s var(--spring), box-shadow .25s;
+}
+.lab-cta:hover { transform: translateY(-2px); box-shadow: var(--glow-gold); }
+.lab-cta:active { transform: translateY(0) scale(.97); }
+.lab-cta--ghost { color: var(--text-dim); background: none; border: 1px solid var(--gold-lo); }
+.lab-cta--ghost:hover { color: var(--text); }
+
+.lab-panel__foot { margin-top: auto; padding-top: .8rem;
+  display: flex; justify-content: space-between; align-items: center;
+  border-top: 1px solid rgba(201,162,75,.12); }
+#fps-meter { font-family: var(--font-num); font-size: .66rem; color: var(--text-mut); }
+.lab-panel__foot a { text-decoration: none; }
+.lab-panel__foot a:hover { color: var(--gold); }
+
+#panel-toggle {
+  position: fixed; top: 12px; right: 300px; z-index: 41;
+  width: 38px; height: 38px; border-radius: 10px;
+  display: grid; place-items: center; font-size: 1.1rem;
+  color: var(--gold); background: rgba(12,18,22,.9);
+  border: 1px solid var(--panel-edge);
+  transition: right .4s var(--ease-out), transform .2s;
+}
+body.panel-collapsed #panel-toggle { right: 14px; }
+#panel-toggle:hover { transform: rotate(45deg); }
+
+/* the board reserves room for the open panel on wide screens */
+@media (min-width: 900px) { body:not(.panel-collapsed):not(.kiosk) #game-view { width: calc(100% - 286px); } }
+
+/* ============================================================================
+   responsive
+   ========================================================================== */
+@media (max-width: 900px) {
+  #lab-panel { width: 250px; }
+  #panel-toggle { right: 264px; }
+}
+@media (max-width: 560px) {
+  #game-header { flex-wrap: wrap; gap: .4rem; padding: .5rem .7rem; }
+  .header-center { order: 3; width: 100%; justify-content: center; }
+  :root { --card-w: clamp(54px, 16vw, 72px); }
+  #lab-panel { width: 100%; }
+  #panel-toggle { right: 14px; }
+}

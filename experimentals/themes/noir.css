@@ -1,0 +1,50 @@
+/* ============================================================================
+   THEME — Noir Deco  (Deadlock-dominant)
+   Near-black, brass-gold framing, incised Cinzel, heavy vignette + grain,
+   restrained juice. Premium, cinematic, moody.
+   Themer owns: this file only. Re-declare tokens + paint FX. Do not touch
+   shared/* (the contract). All tokens are listed in base.css :root.
+   ========================================================================== */
+[data-theme="noir"] {
+  --font-display: 'Cinzel', Georgia, serif;
+
+  --bg:    #0B0F12;
+  --bg-2:  #10161A;
+  --felt:  radial-gradient(130% 120% at 50% 26%, #18211f 0%, #10171a 55%, #080c0e 100%);
+  --felt-edge: rgba(0,0,0,.7);
+
+  --text:     #EFE3C4;
+  --text-dim: rgba(239,227,196,.6);
+  --text-mut: rgba(239,227,196,.34);
+
+  --gold:    #C9A24B;
+  --gold-lo: #7E6428;
+  --gold-hi: #ECD79A;
+  --accent:   #2A6E8F;
+  --accent-2: #B0592A;
+
+  --card-face:  linear-gradient(165deg, #F4ECD6 0%, #E9DCBE 60%, #DECCA6 100%);
+  --card-edge:  rgba(30,22,8,.4);
+  --card-red:   #A8392B;
+  --card-ink:   #1E2528;
+  --card-shadow: 0 8px 18px rgba(0,0,0,.55), 0 1px 0 rgba(255,255,255,.4) inset;
+  --card-back:  repeating-linear-gradient(135deg, #1a1410 0 6px, #211a12 6px 12px);
+  --card-back-ink: var(--gold);
+
+  --panel-edge: rgba(201,162,75,.2);
+  --glow-gold:  0 0 16px rgba(201,162,75,.4);
+}
+
+/* deco corner framing on the board */
+[data-theme="noir"] #game-board::before,
+[data-theme="noir"] #game-board::after {
+  content: ""; position: absolute; z-index: 1; width: 78px; height: 78px;
+  border: 2px solid rgba(201,162,75,.28); pointer-events: none;
+}
+[data-theme="noir"] #game-board::before { top: 12px; left: 12px; border-right: 0; border-bottom: 0; }
+[data-theme="noir"] #game-board::after  { bottom: 12px; right: 12px; border-left: 0; border-top: 0; }
+
+[data-theme="noir"] .fx-glow {
+  background: radial-gradient(42% 32% at 50% 34%, rgba(201,162,75,.12), transparent 72%);
+}
+[data-theme="noir"] .brand-mark { color: var(--gold-hi); }
