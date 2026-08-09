@@ -178,6 +178,9 @@ const app = {
     try {
       firebase.initializeApp(firebaseConfig);
       this._db = firebase.database();
+      firebase.auth().signInAnonymously().catch((err) => {
+        this.log('error', 'Anonymous auth failed:', err);
+      });
       this.log('info', 'Firebase initialized');
     } catch (e) {
       this.log('error', 'Firebase init failed:', e);
