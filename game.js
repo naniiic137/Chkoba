@@ -922,13 +922,32 @@ const app = {
       }
     }
 
+    // Most Sevens rule: whoever has more 7s gets +1. Tie on 7s → check 6s. Tie on 6s → no point.
+    const sevenCounts = [0, 0];
+    const sixCounts = [0, 0];
+    for (let t = 0; t < teamCount; t++) {
+      for (const card of gs.capturedTeams[t]) {
+        if (card.name === '7') sevenCounts[t]++;
+        if (card.name === '6') sixCounts[t]++;
+      }
+    }
+    let mostSevensPt = -1;
+    if (sevenCounts[0] !== sevenCounts[1]) {
+      mostSevensPt = sevenCounts[0] > sevenCounts[1] ? 0 : 1;
+    } else {
+      if (sixCounts[0] !== sixCounts[1]) {
+        mostSevensPt = sixCounts[0] > sixCounts[1] ? 0 : 1;
+      }
+    }
+
     if (mostCardsPt >= 0) gs.scores[mostCardsPt]++;
     if (mostDiamondsPt >= 0) gs.scores[mostDiamondsPt]++;
     if (sevenDiamondsPt >= 0) gs.scores[sevenDiamondsPt]++;
+    if (mostSevensPt >= 0) gs.scores[mostSevensPt]++;
     gs.scores[0] += gs.shkobbaCount[0];
     gs.scores[1] += gs.shkobbaCount[1];
 
-    gs.lastScore = { mostCardsPt, mostDiamondsPt, sevenDiamondsPt };
+    gs.lastScore = { mostCardsPt, mostDiamondsPt, sevenDiamondsPt, mostSevensPt };
     gs.phase = 'round_end';
     this.addLogEntry(`📊 Round scored — Team 1: ${gs.scores[0]}, Team 2: ${gs.scores[1]}`);
     this.log('info', 'round scored:', gs.scores[0], '-', gs.scores[1],
@@ -1485,6 +1504,11 @@ const app = {
               <td>7 of Diamonds</td>
               <td>${ls.sevenDiamondsPt === 0 ? '<strong style="color:var(--gold)">(+1)</strong>' : '0'}</td>
               <td>${ls.sevenDiamondsPt === 1 ? '<strong style="color:var(--gold)">(+1)</strong>' : '0'}</td>
+            </tr>
+            <tr>
+              <td>Most Sevens</td>
+              <td>${ls.mostSevensPt === 0 ? '<strong style="color:var(--gold)">(+1)</strong>' : '0'}</td>
+              <td>${ls.mostSevensPt === 1 ? '<strong style="color:var(--gold)">(+1)</strong>' : '0'}</td>
             </tr>
             <tr>
               <td>Shkobba Count</td>
