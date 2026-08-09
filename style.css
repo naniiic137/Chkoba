@@ -503,55 +503,94 @@ body::after {
 #game-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.6rem 1rem;
-  background: rgba(0, 0, 0, 0.65);
+  justify-content: center;
+  padding: 0.5rem 0.8rem;
+  background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   z-index: 10;
-  gap: 0.5rem;
-}
-
-.header-left, .header-center, .header-right {
-  display: flex;
-  align-items: center;
   gap: 0.6rem;
 }
 
-.header-left { flex: 0 0 auto; }
-.header-center { flex: 1; justify-content: center; flex-wrap: wrap; gap: 0.4rem 0.8rem; }
-.header-right { flex: 0 0 auto; }
+.header-scores {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+  justify-content: center;
+}
 
-.game-info {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
+.score-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid;
+  min-width: 55px;
+  justify-content: center;
+}
+
+.score-pill.t1 { border-color: var(--team1); }
+.score-pill.t2 { border-color: var(--team2); }
+
+.score-pill .score-label {
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  opacity: 0.7;
+}
+
+.score-pill.t1 .score-label { color: var(--team1); }
+.score-pill.t2 .score-label { color: var(--team2); }
+
+.score-pill .score-value {
+  font-size: 1.1rem;
+  font-weight: 900;
+}
+
+.score-pill.t1 .score-value { color: var(--team1); }
+.score-pill.t2 .score-value { color: var(--team2); }
+
+.header-game-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  min-width: 100px;
+}
+
+.status-turn {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.status-turn .your-turn {
+  color: var(--gold);
+  font-weight: 800;
+  text-shadow: 0 0 12px var(--gold-glow);
+}
+
+.status-info {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.68rem;
+  color: var(--text-dim);
   font-weight: 600;
 }
 
-.room-badge {
-  background: rgba(0, 0, 0, 0.45);
-  color: var(--gold);
-  padding: 0.35rem 0.75rem;
-  border-radius: 8px;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 2px;
-  border: 1px solid var(--gold-dim);
+.status-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-dim);
 }
-
-.score-badge {
-  background: rgba(0, 0, 0, 0.35);
-  padding: 0.3rem 0.7rem;
-  border-radius: 8px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.score-badge.t1 { border: 1px solid var(--team1); color: var(--team1); }
-.score-badge.t2 { border: 1px solid var(--team2); color: var(--team2); }
 
 .header-btn {
   background: rgba(255, 255, 255, 0.06);
@@ -566,6 +605,7 @@ body::after {
   cursor: pointer;
   font-size: 1.2rem;
   transition: all 0.2s;
+  flex-shrink: 0;
 }
 
 .header-btn:hover {
@@ -656,70 +696,108 @@ body::after {
   flex-shrink: 0;
 }
 
-.opponent-info {
-  text-align: center;
-  padding: 0.7rem 0.6rem;
+/* Opponent card (redesigned) */
+.opponent-card {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
   border-radius: var(--radius-md);
-  background: rgba(0, 0, 0, 0.3);
-  min-width: 105px;
-  border: 1px solid transparent;
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid transparent;
   transition: all 0.3s var(--ease-out);
   backdrop-filter: blur(10px);
+  min-width: 110px;
 }
 
-.opponent-info .name {
-  font-weight: 700;
+.opp-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
   font-size: 0.85rem;
-  margin-bottom: 0.25rem;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid var(--border-subtle);
   color: var(--text-primary);
 }
 
-.opponent-info .card-count {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
+.opponent-card.team1 .opp-avatar { border-color: var(--team1); color: var(--team1); background: var(--team1-dim); }
+.opponent-card.team2 .opp-avatar { border-color: var(--team2); color: var(--team2); background: var(--team2-dim); }
 
-.opponent-info .captured-count {
-  font-size: 0.75rem;
-  color: var(--gold);
-  font-weight: 600;
-}
-
-.opponent-info .captured-row {
+.opp-details {
   display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  margin-top: 0.35rem;
-  justify-content: center;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
 }
 
-.opponent-info .captured-pile {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-}
-
-.opponent-info .captured-label {
-  font-size: 0.72rem;
-  color: var(--gold);
+.opp-name {
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: var(--text-primary);
   white-space: nowrap;
-  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.opponent-info.active-turn {
+.opp-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.hand-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.hand-dot {
+  width: 7px;
+  height: 10px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.opp-done {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.opp-captured {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--gold);
+  background: rgba(240, 192, 48, 0.12);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.opp-shkobba {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--gold);
+}
+
+.opponent-card.active-turn {
   border-color: var(--gold);
-  box-shadow: 0 0 24px var(--gold-glow), inset 0 0 12px rgba(240,192,48,0.04);
+  box-shadow: 0 0 20px var(--gold-glow);
   animation: turnGlow 2s ease-in-out infinite;
 }
 
 @keyframes turnGlow {
-  0%, 100% { box-shadow: 0 0 18px var(--gold-glow); }
-  50% { box-shadow: 0 0 36px var(--gold-glow-strong); }
+  0%, 100% { box-shadow: 0 0 16px var(--gold-glow); }
+  50% { box-shadow: 0 0 32px var(--gold-glow-strong); }
 }
-
-.opponent-info.team1 { border-left: 3px solid var(--team1-dim); }
-.opponent-info.team2 { border-left: 3px solid var(--team2-dim); }
 
 /* ============================= TABLE AREA ============================= */
 #table-area {
@@ -973,10 +1051,39 @@ body::after {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.4rem;
-  min-height: 58px;
 }
 
 .my-captured.hidden { display: none; }
+
+.my-captured-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(240, 192, 48, 0.1);
+  border: 1px solid var(--gold-dim);
+  border-radius: 20px;
+  padding: 0.3rem 0.8rem;
+}
+
+.my-captured-pill .cap-icon {
+  color: var(--gold);
+  font-size: 0.8rem;
+}
+
+.my-captured-pill .cap-count {
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: var(--gold);
+}
+
+.my-captured-pill .cap-shkobba {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--gold-light);
+  background: rgba(240, 192, 48, 0.15);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+}
 
 #hand-cards {
   display: flex;
@@ -1724,8 +1831,12 @@ body::after {
   .debug-panel { width: 320px; }
   #controls-panel { width: 320px; right: -330px; }
 
-  #game-header { padding: 0.4rem 0.7rem; }
-  .game-info, .room-badge, .score-badge { font-size: 0.72rem; }
+  #game-header { padding: 0.4rem 0.6rem; }
+  .score-pill { padding: 0.3rem 0.6rem; min-width: 48px; }
+  .score-pill .score-value { font-size: 0.95rem; }
+  .score-pill .score-label { font-size: 0.58rem; }
+  .status-turn { font-size: 0.78rem; }
+  .status-info { font-size: 0.62rem; }
 }
 
 /* Small phones */
@@ -1746,7 +1857,13 @@ body::after {
   .opponent-info { min-width: 50px; padding: 0.3rem; }
   .opponent-info .name { font-size: 0.65rem; }
   #game-header { padding: 0.3rem 0.5rem; gap: 0.3rem; }
-  .game-info, .room-badge, .score-badge { font-size: 0.65rem; }
+  .score-pill { padding: 0.25rem 0.5rem; min-width: 42px; }
+  .score-pill .score-value { font-size: 0.85rem; }
+  .header-game-status { min-width: 80px; }
+  .status-turn { font-size: 0.72rem; }
+  .opponent-card { min-width: 90px; padding: 0.4rem 0.5rem; }
+  .opp-avatar { width: 26px; height: 26px; font-size: 0.72rem; }
+  .opp-name { font-size: 0.68rem; }
   .hand-actions { gap: 0.6rem; }
   .btn-action { padding: 0.6rem 1rem; font-size: 0.75rem; min-width: 70px; }
   #hand-area { padding: 0.4rem 0.5rem calc(0.6rem + var(--safe-bottom)); }

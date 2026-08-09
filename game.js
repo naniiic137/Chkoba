@@ -502,6 +502,75 @@ const app = {
     });
   },
 
+  // ========== PLAY VS BOT ==========
+  playVsBot() {
+    const name = document.getElementById('player-name').value.trim();
+    if (!name) { this.toast('Please enter your name'); return; }
+    this.myName = name;
+    this.isHost = true;
+    this._isBotGame = true;
+    this.playerCount = 2;
+    this.forceCapture = document.getElementById('force-capture').checked;
+    this.winScore = parseInt(document.getElementById('win-score').value);
+    this.turnTimerDuration = parseInt(document.getElementById('turn-timer').value);
+
+    this.roomCode = 'BOT';
+    this.myPlayerId = 0;
+    this.playerList = [this.myName, 'Bot'];
+    this.moveLog = [];
+    this._roomRef = null;
+
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    this.startGame();
+  },
+
+  botPlay() {
+    if (!this._isBotGame || !this.isHost) return;
+    const gs = this.gameState;
+    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== 1) return;
+
+    const hand = gs.hands[1];
+    if (!hand || hand.length === 0) return;
+
+    let bestMove = null;
+    let bestScore = -1;
+
+    for (let ci = 0; ci < hand.length; ci++) {
+      const card = hand[ci];
+      const captures = findCaptureCombinations(gs.tableCards, card.value);
+      if (captures.length > 0) {
+        for (const combo of captures) {
+          let score = combo.length;
+          const capturedCards = combo.map(i => gs.tableCards[i]);
+          if (capturedCards.some(c => c.suit === 'diamonds')) score += 3;
+          if (capturedCards.some(c => c.suit === 'diamonds' && c.name === '7')) score += 5;
+          if (combo.length === gs.tableCards.length) score += 10;
+          if (score > bestScore) {
+            bestScore = score;
+            bestMove = { cardId: card.id, captureCardIds: combo.map(i => gs.tableCards[i].id) };
+          }
+        }
+      }
+    }
+
+    if (!bestMove) {
+      const safeCards = hand.filter(c => {
+        return !findCaptureCombinations(gs.tableCards.concat([c]), c.value).length;
+      });
+      const card = safeCards.length > 0 ? safeCards[0] : hand[0];
+      bestMove = { cardId: card.id, captureCardIds: [] };
+    }
+
+    if (gs.forceCapture && bestScore < 0) {
+      const card = hand[0];
+      bestMove = { cardId: card.id, captureCardIds: [] };
+    }
+
+    setTimeout(() => {
+      this.handlePlay({ playerId: 1, ...bestMove });
+    }, 600 + Math.random() * 800);
+  },
+
   // ========== START GAME ==========
   startGame() {
     if (!this.isHost) return;
@@ -553,6 +622,7 @@ const app = {
     this.broadcastGameState();
     this.renderGame();
     this.startTurnTimer();
+    if (this._isBotGame && gs.currentTurn === 1) this.botPlay();
   },
 
   // ========== TURN MANAGEMENT ==========
@@ -570,6 +640,7 @@ const app = {
     this.broadcastGameState();
     this.renderGame();
     this.startTurnTimer();
+    if (this._isBotGame && gs.currentTurn === 1) this.botPlay();
   },
 
   endRound() {
@@ -894,20 +965,21 @@ const app = {
 
   // ========== NETWORKING ==========
   broadcastGameState() {
-    if (!this.isHost || !this.gameState || !this._roomRef) return;
+    if (!this.isHost || !this.gameState) return;
     const gs = this.gameState;
 
-    // Write public state, hands, and log atomically
-    const updates = {};
-    updates['state'] = this.buildPublicState();
-    for (let i = 0; i < gs.numPlayers; i++) {
-      updates['hand_' + i] = gs.hands[i] || [];
+    if (this._roomRef) {
+      const updates = {};
+      updates['state'] = this.buildPublicState();
+      for (let i = 0; i < gs.numPlayers; i++) {
+        updates['hand_' + i] = gs.hands[i] || [];
+      }
+      updates['log'] = this.moveLog.slice(-50);
+      this._roomRef.update(updates).catch(err => {
+        this.log('error', 'broadcastGameState write failed:', err.message);
+        this.toast('Connection issue — move may not have synced');
+      });
     }
-    updates['log'] = this.moveLog.slice(-50);
-    this._roomRef.update(updates).catch(err => {
-      this.log('error', 'broadcastGameState write failed:', err.message);
-      this.toast('Connection issue — move may not have synced');
-    });
     this.log('debug', 'broadcast state: turn', gs.currentTurn, 'phase', gs.phase, 'deck', gs.deck.length);
 
     // Update host's local hand
@@ -1186,25 +1258,27 @@ const app = {
 
   renderHeader() {
     const gs = this.gameState;
-    document.getElementById('game-room-code').textContent = this.roomCode;
-    document.getElementById('round-num').textContent = gs.roundNum + 1;
-    document.getElementById('round-total').textContent = gs.totalRounds;
     const deckCount = gs.deck ? gs.deck.length : (gs.deckCount || 0);
-    document.getElementById('deck-display').textContent = 'Deck: ' + deckCount;
+
+    document.getElementById('round-display').textContent = `R${gs.roundNum + 1}/${gs.totalRounds}`;
+    document.getElementById('deck-display').textContent = `${deckCount} left`;
 
     const turnEl = document.getElementById('turn-display');
     if (gs.phase === 'playing' && gs.currentTurn >= 0) {
       const p = gs.players[gs.currentTurn];
-      turnEl.textContent = 'Turn: ' + (p ? p.name : '--');
-      if (gs.currentTurn === this.myPlayerId) turnEl.innerHTML = 'Turn: <strong style="color:var(--gold)">Your Turn!</strong>';
+      if (gs.currentTurn === this.myPlayerId) {
+        turnEl.innerHTML = '<span class="your-turn">Your Turn!</span>';
+      } else {
+        turnEl.textContent = p ? p.name + "'s turn" : '--';
+      }
     } else if (gs.phase === 'round_end') turnEl.textContent = 'Round End';
     else if (gs.phase === 'finished') turnEl.textContent = 'Game Over';
     else turnEl.textContent = '--';
 
-    document.getElementById('score-t1').textContent = 'Team 1: ' + gs.scores[0];
-    document.getElementById('score-t2').textContent = 'Team 2: ' + gs.scores[1];
-    document.getElementById('score-t1').className = 'score-badge t1';
-    document.getElementById('score-t2').className = 'score-badge t2';
+    const t1El = document.getElementById('score-t1');
+    const t2El = document.getElementById('score-t2');
+    t1El.querySelector('.score-value').textContent = gs.scores[0];
+    t2El.querySelector('.score-value').textContent = gs.scores[1];
   },
 
   renderOpponents() {
@@ -1231,23 +1305,21 @@ const app = {
     const isTurn = gs.currentTurn === player.id;
     const capCount = gs.capturedCounts ? gs.capturedCounts[player.team] : (gs.capturedTeams ? gs.capturedTeams[player.team].length : 0);
     const handCards = gs.cardsPlayedThisRound ? 3 - (gs.cardsPlayedThisRound[player.id] || 0) : 3;
-    const shkobbaDots = gs.shkobbaCount[player.team] > 0
-      ? '<span class="shkobba-marker"></span>'.repeat(gs.shkobbaCount[player.team]) : '';
+    const shkobbaCount = gs.shkobbaCount[player.team] || 0;
 
-    let pileHtml = '';
-    if (capCount > 0) {
-      const stacks = Math.min(capCount, 5);
-      for (let i = 0; i < stacks; i++) {
-        pileHtml += `<div class="card-back mini" style="margin-left:${i > 0 ? '-30px' : '0'}"></div>`;
-      }
-    }
+    const handDots = handCards > 0
+      ? '<span class="hand-dots">' + '<span class="hand-dot"></span>'.repeat(handCards) + '</span>'
+      : '<span class="opp-done">done</span>';
 
-    return `<div class="opponent-info ${isTurn ? 'active-turn' : ''} team${player.team + 1}">
-      <div class="name">${escapeHtml(player.name)} (T${player.team + 1})</div>
-      <div class="card-count">${handCards > 0 ? 'Cards: ' + handCards : '<span style="color:var(--text-dim);">Done</span>'}</div>
-      <div class="captured-row">
-        <div class="captured-pile">${pileHtml}</div>
-        <div class="captured-label">${capCount} ${shkobbaDots}</div>
+    return `<div class="opponent-card ${isTurn ? 'active-turn' : ''} team${player.team + 1}">
+      <div class="opp-avatar">${escapeHtml(player.name.charAt(0).toUpperCase())}</div>
+      <div class="opp-details">
+        <div class="opp-name">${escapeHtml(player.name)}</div>
+        <div class="opp-stats">
+          ${handDots}
+          <span class="opp-captured">${capCount}</span>
+          ${shkobbaCount > 0 ? `<span class="opp-shkobba">+${shkobbaCount}</span>` : ''}
+        </div>
       </div>
     </div>`;
   },
@@ -1320,12 +1392,7 @@ const app = {
 
     if (capturedEl) {
       if (capturedCount > 0) {
-        let pileEls = '';
-        const stacks = Math.min(capturedCount, 5);
-        for (let i = 0; i < stacks; i++) {
-          pileEls += `<div class="card-back mini" style="margin-left:${i > 0 ? '-30px' : '0'}"></div>`;
-        }
-        capturedEl.innerHTML = `<span style="color:var(--text-secondary);font-size:0.72rem;font-weight:600;">Captured:</span> ${pileEls} <span style="color:var(--gold);font-size:0.85rem;font-weight:700;">${capturedCount}</span>${myShkobba > 0 ? ' <span class="shkobba-marker"></span>'.repeat(myShkobba) : ''}`;
+        capturedEl.innerHTML = `<div class="my-captured-pill"><span class="cap-icon">&#9670;</span><span class="cap-count">${capturedCount}</span>${myShkobba > 0 ? `<span class="cap-shkobba">+${myShkobba}</span>` : ''}</div>`;
         capturedEl.classList.remove('hidden');
       } else {
         capturedEl.classList.add('hidden');

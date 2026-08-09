@@ -64,6 +64,7 @@
         </div>
 
         <button id="create-game-btn" class="btn btn-primary btn-big" onclick="app.createGame()">Create Game</button>
+        <button class="btn btn-secondary btn-big" onclick="app.playVsBot()" style="margin-top:0.6rem;">Play vs Bot</button>
       </div>
     </div>
 
@@ -115,20 +116,25 @@
     <!-- ============ GAME VIEW ============ -->
     <div id="game-view" class="view">
       <div id="game-header">
-        <div class="header-left">
-          <span class="room-badge" id="game-room-code"></span>
-          <span id="timer-text"></span>
+        <div class="header-scores">
+          <div class="score-pill t1" id="score-t1">
+            <span class="score-label">T1</span>
+            <span class="score-value">0</span>
+          </div>
+          <div class="header-game-status">
+            <div class="status-turn" id="turn-display">Your Turn!</div>
+            <div class="status-info">
+              <span id="round-display">R1/6</span>
+              <span class="status-dot"></span>
+              <span id="deck-display">24 left</span>
+            </div>
+          </div>
+          <div class="score-pill t2" id="score-t2">
+            <span class="score-label">T2</span>
+            <span class="score-value">0</span>
+          </div>
         </div>
-        <div class="header-center">
-          <span class="game-info">Round <span id="round-num">0</span>/<span id="round-total">0</span></span>
-          <span class="game-info" id="deck-display">Deck: 0</span>
-          <span class="game-info" id="turn-display">Turn: --</span>
-        </div>
-        <div class="header-right">
-          <span class="score-badge" id="score-t1">Team 1: 0</span>
-          <span class="score-badge" id="score-t2">Team 2: 0</span>
-          <button class="header-btn" id="btn-controls" onclick="app.toggleControls()" title="Game Menu">⚙</button>
-        </div>
+        <button class="header-btn" id="btn-controls" onclick="app.toggleControls()" title="Game Menu">⚙</button>
       </div>
 
       <div id="timer-bar-container">
