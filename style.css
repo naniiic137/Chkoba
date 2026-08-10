@@ -42,9 +42,9 @@
   --warning: #ffa726;
   --success: #66bb6a;
 
-  --card-w: 105px;
-  --card-h: 148px;
-  --card-radius: 12px;
+  --card-w: 120px;
+  --card-h: 168px;
+  --card-radius: 14px;
   --radius-sm: 10px;
   --radius-md: 16px;
   --radius-lg: 22px;
@@ -525,12 +525,12 @@ body::after {
 .score-pill {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.8rem;
-  border-radius: 20px;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 22px;
   background: rgba(0, 0, 0, 0.4);
   border: 2px solid;
-  min-width: 55px;
+  min-width: 65px;
   justify-content: center;
 }
 
@@ -538,7 +538,7 @@ body::after {
 .score-pill.t2 { border-color: var(--team2); }
 
 .score-pill .score-label {
-  font-size: 0.65rem;
+  font-size: 0.75rem;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -549,7 +549,7 @@ body::after {
 .score-pill.t2 .score-label { color: var(--team2); }
 
 .score-pill .score-value {
-  font-size: 1.1rem;
+  font-size: 1.3rem;
   font-weight: 900;
 }
 
@@ -565,7 +565,7 @@ body::after {
 }
 
 .status-turn {
-  font-size: 0.85rem;
+  font-size: 1rem;
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -580,7 +580,7 @@ body::after {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.68rem;
+  font-size: 0.78rem;
   color: var(--text-dim);
   font-weight: 600;
 }
@@ -596,9 +596,9 @@ body::after {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -700,25 +700,25 @@ body::after {
 .opponent-card {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.7rem;
+  gap: 0.6rem;
+  padding: 0.6rem 0.85rem;
   border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.35);
   border: 2px solid transparent;
   transition: all 0.3s var(--ease-out);
   backdrop-filter: blur(10px);
-  min-width: 110px;
+  min-width: 120px;
 }
 
 .opp-avatar {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 800;
-  font-size: 0.85rem;
+  font-size: 0.95rem;
   flex-shrink: 0;
   background: rgba(255, 255, 255, 0.08);
   border: 2px solid var(--border-subtle);
@@ -737,7 +737,7 @@ body::after {
 
 .opp-name {
   font-weight: 700;
-  font-size: 0.78rem;
+  font-size: 0.88rem;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -756,8 +756,8 @@ body::after {
 }
 
 .hand-dot {
-  width: 7px;
-  height: 10px;
+  width: 8px;
+  height: 12px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -902,6 +902,84 @@ body::after {
   100% { opacity: 0; transform: translateY(-20px); }
 }
 
+/* ============================= SHKOBBA BADGE (score pills) ============================= */
+.shkobba-badge {
+  font-size: 0.6rem;
+  font-weight: 800;
+  color: var(--gold);
+  background: rgba(240, 192, 48, 0.15);
+  padding: 0.1rem 0.35rem;
+  border-radius: 8px;
+  margin-left: 0.2rem;
+  letter-spacing: 0.5px;
+}
+
+/* ============================= LAST CAPTURE INFO ============================= */
+.last-capture-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  min-width: 80px;
+  max-width: 100px;
+}
+.last-capture-info.hidden { display: none; }
+.lc-label {
+  font-size: 0.58rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.lc-label.team1 { color: var(--team1); }
+.lc-label.team2 { color: var(--team2); }
+.lc-played-card {
+  width: 62px;
+  height: 88px;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 2px solid var(--gold);
+  box-shadow: 0 0 8px var(--gold-glow);
+}
+.lc-played-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.lc-arrow {
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  line-height: 1;
+}
+.lc-captured-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  justify-content: center;
+}
+.lc-cap-card {
+  width: 42px;
+  height: 59px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border-medium);
+  opacity: 0.85;
+}
+.lc-cap-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 /* ============================= CARDS ============================= */
 .card {
   width: var(--card-w);
@@ -948,6 +1026,23 @@ body::after {
     0 0 0 3px var(--gold),
     0 0 40px var(--gold-glow-strong) !important;
   z-index: 10;
+}
+
+.card.can-capture {
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.5),
+    0 0 0 2px rgba(100, 255, 140, 0.6);
+  animation: captureGlow 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes captureGlow {
+  from { box-shadow: 0 4px 12px rgba(0,0,0,0.5), 0 0 0 2px rgba(100,255,140,0.4); }
+  to   { box-shadow: 0 4px 12px rgba(0,0,0,0.5), 0 0 0 3px rgba(100,255,140,0.8), 0 0 12px rgba(100,255,140,0.3); }
+}
+
+.card.no-capture {
+  opacity: 0.45;
+  filter: grayscale(0.4);
 }
 
 .card.capture-target {
@@ -1038,7 +1133,7 @@ body::after {
 }
 
 .player-label {
-  font-size: 0.85rem;
+  font-size: 1rem;
   font-weight: 700;
   margin-bottom: 0.4rem;
   color: var(--gold);
@@ -1067,11 +1162,11 @@ body::after {
 
 .my-captured-pill .cap-icon {
   color: var(--gold);
-  font-size: 0.8rem;
+  font-size: 0.95rem;
 }
 
 .my-captured-pill .cap-count {
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   font-weight: 800;
   color: var(--gold);
 }
@@ -1100,12 +1195,69 @@ body::after {
   margin-bottom: 0.3rem;
 }
 
+/* ============================= EMOTES ============================= */
+.emote-bar {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.emote-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 0.3rem 0.65rem;
+  border-radius: 14px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s var(--ease-out);
+  font-family: 'Inter', sans-serif;
+}
+
+.emote-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-medium);
+  color: var(--text-primary);
+  transform: scale(1.05);
+}
+
+.emote-btn:active {
+  transform: scale(0.95);
+}
+
+.emote-display {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--gold-light);
+  font-size: 1.4rem;
+  font-weight: 800;
+  padding: 0.8rem 1.6rem;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--gold-dim);
+  z-index: 200;
+  pointer-events: none;
+  animation: emoteIn 0.3s var(--ease-bounce);
+}
+
+.emote-display.hidden { display: none; }
+
+@keyframes emoteIn {
+  from { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+  to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+
 .btn-action {
-  padding: 0.85rem 2rem;
+  padding: 1rem 2.2rem;
   border: none;
   border-radius: var(--radius-sm);
   font-family: 'Inter', sans-serif;
-  font-size: 0.92rem;
+  font-size: 1.05rem;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.18s var(--ease-out);
@@ -1796,8 +1948,8 @@ body::after {
 /* Tablet & small desktop */
 @media (max-width: 900px) {
   :root {
-    --card-w: 92px;
-    --card-h: 130px;
+    --card-w: 100px;
+    --card-h: 140px;
   }
 }
 
@@ -1807,9 +1959,9 @@ body::after {
   .lobby-container { padding: 2.2rem 1.8rem; max-width: 380px; }
 
   :root {
-    --card-w: 80px;
-    --card-h: 112px;
-    --card-radius: 10px;
+    --card-w: 88px;
+    --card-h: 124px;
+    --card-radius: 11px;
   }
 
   .card-back.mini { width: 32px; height: 45px; }
@@ -1825,6 +1977,8 @@ body::after {
   #hand-cards { gap: 0.5rem; }
   .hand-actions { gap: 0.8rem; }
   .btn-action { padding: 0.7rem 1.4rem; font-size: 0.82rem; }
+  .emote-bar { gap: 0.3rem; }
+  .emote-btn { padding: 0.25rem 0.5rem; font-size: 0.65rem; }
   .shkobba-announce { font-size: 1.6rem; }
   .modal-content { padding: 2rem 1.5rem; }
   .modal-content h2 { font-size: 1.7rem; }
@@ -1845,15 +1999,15 @@ body::after {
   .lobby-container { padding: 2rem 1.4rem; }
 
   :root {
-    --card-w: 70px;
-    --card-h: 98px;
+    --card-w: 76px;
+    --card-h: 106px;
     --card-radius: 9px;
   }
 
-  .card-back.mini { width: 28px; height: 40px; }
-  #table-area { padding: 0.6rem; flex-direction: column; gap: 0.5rem; }
+  .card-back.mini { width: 30px; height: 42px; }
+  #table-area { padding: 0.6rem; flex-direction: column; gap: 0.5rem; overflow: visible; }
   #table-cards { gap: 0.4rem; }
-  .opponent-side { width: 65px; }
+  .opponent-side { width: 70px; }
   .opponent-info { min-width: 50px; padding: 0.3rem; }
   .opponent-info .name { font-size: 0.65rem; }
   #game-header { padding: 0.3rem 0.5rem; gap: 0.3rem; }
@@ -1869,6 +2023,9 @@ body::after {
   #hand-area { padding: 0.4rem 0.5rem calc(0.6rem + var(--safe-bottom)); }
   #hand-cards { gap: 0.35rem; }
   .player-label { font-size: 0.72rem; }
+  .emote-bar { gap: 0.25rem; margin-top: 0.3rem; }
+  .emote-btn { padding: 0.2rem 0.45rem; font-size: 0.6rem; }
+  .emote-display { font-size: 1.1rem; padding: 0.6rem 1.2rem; }
   .toast { font-size: 0.8rem; padding: 0.55rem 1.2rem; }
   .debug-panel { width: 280px; }
   #controls-panel { width: 290px; right: -300px; }
@@ -1881,6 +2038,21 @@ body::after {
   .card.selected {
     transform: translateY(-14px) scale(1.05) !important;
   }
+
+  .last-capture-info {
+    flex-direction: row;
+    align-items: center;
+    min-width: unset;
+    max-width: 100%;
+    width: auto;
+    padding: 0.3rem 0.5rem;
+    gap: 0.4rem;
+  }
+  .lc-played-card { width: 36px; height: 50px; }
+  .lc-cap-card { width: 28px; height: 39px; }
+  .lc-label { font-size: 0.55rem; }
+  .lc-arrow { transform: rotate(-90deg); font-size: 0.5rem; }
+  .lc-captured-cards { flex-wrap: nowrap; }
 }
 
 /* Very small phones (iPhone SE etc.) */
@@ -1895,6 +2067,21 @@ body::after {
   #table-cards { gap: 0.3rem; }
   #hand-cards { gap: 0.25rem; }
   .btn-action { padding: 0.5rem 0.8rem; font-size: 0.7rem; }
+  .last-capture-info {
+    flex-direction: row;
+    min-width: unset;
+    max-width: 100%;
+    padding: 0.25rem 0.4rem;
+    gap: 0.3rem;
+  }
+  .lc-played-card { width: 30px; height: 42px; }
+  .lc-cap-card { width: 24px; height: 34px; }
+  .lc-arrow { transform: rotate(-90deg); font-size: 0.45rem; }
+  .emote-bar { gap: 0.2rem; }
+  .emote-btn { padding: 0.15rem 0.35rem; font-size: 0.55rem; border-radius: 10px; }
+  .score-pill { padding: 0.2rem 0.4rem; min-width: 38px; gap: 0.3rem; }
+  .score-pill .score-value { font-size: 0.8rem; }
+  .score-pill .score-label { font-size: 0.5rem; }
 }
 
 /* Tall phones - give more vertical space to the play area */
@@ -1905,15 +2092,21 @@ body::after {
   .my-captured { min-height: 45px; margin-bottom: 0.2rem; }
 }
 
-/* Desktop large screens - slightly larger cards */
+/* Desktop large screens - larger cards */
 @media (min-width: 1200px) {
   :root {
-    --card-w: 115px;
-    --card-h: 162px;
-    --card-radius: 14px;
+    --card-w: 130px;
+    --card-h: 182px;
+    --card-radius: 16px;
   }
 
-  #table-cards { gap: 1rem; }
-  #hand-cards { gap: 1rem; }
-  .card-back.mini { width: 42px; height: 58px; }
+  #table-cards { gap: 1.1rem; }
+  #hand-cards { gap: 1.1rem; }
+  .card-back.mini { width: 46px; height: 64px; }
+  .score-pill .score-value { font-size: 1.4rem; }
+  .opponent-card { min-width: 130px; }
+  .opp-avatar { width: 42px; height: 42px; font-size: 1rem; }
+  .opp-name { font-size: 0.95rem; }
+  .btn-action { padding: 1.1rem 2.4rem; font-size: 1.1rem; }
+  .player-label { font-size: 1.1rem; }
 }

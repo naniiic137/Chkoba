@@ -81,6 +81,10 @@ function findCaptureCombinations(tableCards, targetValue) {
   return results;
 }
 
+function hasDirectMatch(hand, tableCards) {
+  return hand.some(c => tableCards.some(tc => tc.value === c.value));
+}
+
 function genRoomCode() {
   // Crypto-random, 8 chars from a 31-symbol alphabet (~8.5e11 keyspace) so room codes
   // cannot be enumerated. Math.random() at 4 chars was ~923k and brute-forceable.
@@ -128,6 +132,9 @@ const app = {
   animationsEnabled: true,
   isSubmittingMove: false,
   animateDeal: false,
+  botDifficulty: 'medium',
+  gameSpeed: 'normal',
+  _emoteTimeout: null,
   _lastCardClickIndex: -1,
   _lastCardClickTime: 0,
   _lastTimerSec: 0,
@@ -195,15 +202,12 @@ const app = {
       this.showLobby();
     }
     document.addEventListener('keydown', (e) => {
-      if (e.key === '`' || e.key === '~') {
-        e.preventDefault();
-        this.toggleDebug();
-      }
       if (e.key === 'Escape') {
         if (this.controlsOpen) this.toggleControls();
         else if (this.debugEnabled) this.toggleDebug();
       }
     });
+    window.debug = () => { this.toggleDebug(); };
   },
 
   showJoinView(roomCode) {
@@ -228,6 +232,7 @@ const app = {
     this.forceCapture = document.getElementById('force-capture').checked;
     this.winScore = parseInt(document.getElementById('win-score').value);
     this.turnTimerDuration = parseInt(document.getElementById('turn-timer').value);
+    this.gameSpeed = document.getElementById('game-speed').value;
 
     // Generate code and show waiting room IMMEDIATELY
     this.roomCode = genRoomCode();
@@ -381,6 +386,21 @@ const app = {
         // Detect the host leaving WITHOUT subscribing to the whole room node — doing that
         // streamed every player's private hand_* to every client. The host child is set
         // once at creation and removed when the host leaves or disconnects.
+        const emoteRef = this._roomRef.child('emote');
+        emoteRef.on('value', (s) => {
+          const e = s.val();
+          if (e && e.name && e.text) {
+            const el = document.getElementById('emote-display');
+            if (el) {
+              el.textContent = `${e.name}: ${e.text}`;
+              el.classList.remove('hidden');
+              if (this._emoteTimeout) clearTimeout(this._emoteTimeout);
+              this._emoteTimeout = setTimeout(() => { el.classList.add('hidden'); this._emoteTimeout = null; }, 2000);
+            }
+          }
+        });
+        this._playerListeners.push(emoteRef);
+
         const hostRef = this._roomRef.child('host');
         hostRef.on('value', (s) => {
           if (!s.val() && this.gameState) {
@@ -513,10 +533,13 @@ const app = {
     this.forceCapture = document.getElementById('force-capture').checked;
     this.winScore = parseInt(document.getElementById('win-score').value);
     this.turnTimerDuration = parseInt(document.getElementById('turn-timer').value);
+    this.botDifficulty = document.getElementById('bot-difficulty').value;
+    this.gameSpeed = document.getElementById('game-speed').value;
 
     this.roomCode = 'BOT';
     this.myPlayerId = 0;
-    this.playerList = [this.myName, 'Bot'];
+    const botNames = { easy: 'Bot (Easy)', medium: 'Bot', hard: 'Bot (Hard)' };
+    this.playerList = [this.myName, botNames[this.botDifficulty] || 'Bot'];
     this.moveLog = [];
     this._roomRef = null;
 
@@ -532,43 +555,70 @@ const app = {
     const hand = gs.hands[1];
     if (!hand || hand.length === 0) return;
 
+    const diff = this.botDifficulty || 'medium';
     let bestMove = null;
     let bestScore = -1;
 
-    for (let ci = 0; ci < hand.length; ci++) {
-      const card = hand[ci];
+    if (diff === 'easy') {
+      const card = hand[Math.floor(Math.random() * hand.length)];
       const captures = findCaptureCombinations(gs.tableCards, card.value);
       if (captures.length > 0) {
-        for (const combo of captures) {
-          let score = combo.length;
-          const capturedCards = combo.map(i => gs.tableCards[i]);
-          if (capturedCards.some(c => c.suit === 'diamonds')) score += 3;
-          if (capturedCards.some(c => c.suit === 'diamonds' && c.name === '7')) score += 5;
-          if (combo.length === gs.tableCards.length) score += 10;
-          if (score > bestScore) {
-            bestScore = score;
-            bestMove = { cardId: card.id, captureCardIds: combo.map(i => gs.tableCards[i].id) };
+        const combo = captures[Math.floor(Math.random() * captures.length)];
+        bestMove = { cardId: card.id, captureCardIds: combo.map(i => gs.tableCards[i].id) };
+        bestScore = 1;
+      } else {
+        bestMove = { cardId: card.id, captureCardIds: [] };
+      }
+    } else {
+      for (let ci = 0; ci < hand.length; ci++) {
+        const card = hand[ci];
+        const captures = findCaptureCombinations(gs.tableCards, card.value);
+        if (captures.length > 0) {
+          for (const combo of captures) {
+            let score = combo.length;
+            const capturedCards = combo.map(i => gs.tableCards[i]);
+            if (capturedCards.some(c => c.suit === 'diamonds')) score += 3;
+            if (capturedCards.some(c => c.suit === 'diamonds' && c.name === '7')) score += 5;
+            if (combo.length === gs.tableCards.length) score += 10;
+            if (diff === 'hard') {
+              if (capturedCards.some(c => c.name === '7')) score += 4;
+              const directMatch = capturedCards.length === 1 && capturedCards[0].value === card.value;
+              if (directMatch) score += 2;
+            }
+            if (score > bestScore) {
+              bestScore = score;
+              bestMove = { cardId: card.id, captureCardIds: combo.map(i => gs.tableCards[i].id) };
+            }
           }
+        }
+      }
+
+      if (!bestMove) {
+        const safeCards = hand.filter(c => !findCaptureCombinations(gs.tableCards, c.value).length);
+        if (diff === 'hard' && safeCards.length > 0) {
+          const lowCards = safeCards.sort((a, b) => a.value - b.value);
+          bestMove = { cardId: lowCards[0].id, captureCardIds: [] };
+        } else {
+          const card = safeCards.length > 0 ? safeCards[0] : hand[0];
+          bestMove = { cardId: card.id, captureCardIds: [] };
         }
       }
     }
 
-    if (!bestMove) {
-      const safeCards = hand.filter(c => {
-        return !findCaptureCombinations(gs.tableCards.concat([c]), c.value).length;
-      });
-      const card = safeCards.length > 0 ? safeCards[0] : hand[0];
-      bestMove = { cardId: card.id, captureCardIds: [] };
+    if (gs.forceCapture && bestScore < 0 && hasDirectMatch(hand, gs.tableCards)) {
+      for (const c of hand) {
+        const directIdx = gs.tableCards.findIndex(tc => tc.value === c.value);
+        if (directIdx >= 0) {
+          bestMove = { cardId: c.id, captureCardIds: [gs.tableCards[directIdx].id] };
+          break;
+        }
+      }
     }
 
-    if (gs.forceCapture && bestScore < 0) {
-      const card = hand[0];
-      bestMove = { cardId: card.id, captureCardIds: [] };
-    }
-
+    const delays = { slow: 1200 + Math.random() * 800, normal: 600 + Math.random() * 800, fast: 200 + Math.random() * 300 };
     setTimeout(() => {
       this.handlePlay({ playerId: 1, ...bestMove });
-    }, 600 + Math.random() * 800);
+    }, delays[this.gameSpeed] || delays.normal);
   },
 
   // ========== START GAME ==========
@@ -595,7 +645,7 @@ const app = {
       cardsPlayedThisRound: players.map(() => 0), lastCaptureTeam: -1,
       shkobbaCount: [0, 0], scores: [0, 0],
       forceCapture: this.forceCapture, winScore: this.winScore, shkobbaThisTurn: false,
-      turnTimerDuration: this.turnTimerDuration,
+      turnTimerDuration: this.turnTimerDuration, lastCapture: null,
     };
     this.addLogEntry('🎴 Game started!');
     this.log('info', 'game started:', numPlayers, 'players, win at', this.winScore);
@@ -636,7 +686,6 @@ const app = {
       this.endRound(); return;
     }
     gs.currentTurn = next;
-    gs.shkobbaThisTurn = false;
     this.broadcastGameState();
     this.renderGame();
     this.startTurnTimer();
@@ -752,17 +801,26 @@ const app = {
     const hand = gs.hands[playerId];
     if (!hand || hand.length === 0) return;
 
-    // Pick a random card from hand
-    const cardIndex = Math.floor(Math.random() * hand.length);
-    const card = hand[cardIndex];
+    let card = null, captureIds = [];
 
-    // Check for valid captures
-    const captures = findCaptureCombinations(gs.tableCards, card.value);
-    let captureIds = [];
+    if (gs.forceCapture && gs.tableCards.length > 0) {
+      for (const c of hand) {
+        const directIdx = gs.tableCards.findIndex(tc => tc.value === c.value);
+        if (directIdx >= 0) {
+          card = c;
+          captureIds = [gs.tableCards[directIdx].id];
+          break;
+        }
+      }
+    }
 
-    if (gs.forceCapture && captures.length > 0 && gs.tableCards.length > 0) {
-      // Must capture: pick first valid combination
-      captureIds = captures[0].map(i => gs.tableCards[i].id);
+    if (!card) {
+      const cardIndex = Math.floor(Math.random() * hand.length);
+      card = hand[cardIndex];
+      const captures = findCaptureCombinations(gs.tableCards, card.value);
+      if (captures.length > 0) {
+        captureIds = captures[0].map(i => gs.tableCards[i].id);
+      }
     }
 
     const playerName = gs.players[playerId] ? gs.players[playerId].name : 'Player ' + playerId;
@@ -783,6 +841,8 @@ const app = {
     }
 
     this.stopTurnTimer();
+    this._pushHistory();
+    gs.shkobbaThisTurn = false;
 
     const hand = gs.hands[playerId];
     const cardIndex = hand ? hand.findIndex(c => c.id === data.cardId) : -1;
@@ -810,10 +870,12 @@ const app = {
         this.startTurnTimer();
         return;
       }
-    } else if (gs.forceCapture && hasValidCapture && gs.tableCards.length > 0) {
-      this.log('debug', 'move rejected: force-capture is on and a capture exists');
-      this.startTurnTimer();
-      return;
+    } else if (gs.forceCapture && gs.tableCards.length > 0) {
+      if (hasDirectMatch(hand, gs.tableCards)) {
+        this.log('debug', 'move rejected: force-capture is on and a direct match exists');
+        this.startTurnTimer();
+        return;
+      }
     }
 
     this.log('debug', 'processing move: player', playerId, 'plays', getCardDisplayName(playedCard),
@@ -834,12 +896,19 @@ const app = {
       gs.capturedTeams[teamIndex].push(...capturedCards);
       gs.lastCaptureTeam = teamIndex;
 
+      gs.lastCapture = {
+        playerName,
+        teamIndex,
+        playedCard: { name: playedCard.name, suit: playedCard.suit, display: playedCard.display },
+        capturedCards: capturedCards.filter(c => c.id !== playedCard.id).map(c => ({ name: c.name, suit: c.suit, display: c.display })),
+      };
+
       const capturedNames = capturedCards.filter(c => c.id !== playedCard.id).map(c => getCardDisplayName(c)).join('+');
       let logMsg = `${playerName} captured ${capturedNames} with ${getCardDisplayName(playedCard)}`;
 
       // Shkobba: clearing the table
       if (gs.tableCards.length === 0) {
-        if (playerId === gs.dealerIndex && hand.length === 0) {
+        if (playerId === gs.dealerIndex && hand.length === 0 && gs.deck.length === 0) {
           // Last card of dealer, no shkobba
         } else {
           gs.shkobbaCount[teamIndex]++;
@@ -872,6 +941,7 @@ const app = {
       }
     } else {
       gs.tableCards.push(playedCard);
+      gs.lastCapture = null;
       this.addLogEntry(`${playerName} placed ${getCardDisplayName(playedCard)}`);
       this.playSound('place');
     }
@@ -879,11 +949,14 @@ const app = {
     gs.cardsPlayedThisRound[playerId]++;
 
     if (gs.hands.every(h => h.length === 0) && gs.deck.length === 0) {
-      gs.currentTurn = -1; this.broadcastGameState(); this.renderGame();
+      gs.currentTurn = -1;
       setTimeout(() => this.endRound(), 1000);
+      this.broadcastGameState(); this.renderGame();
     } else if (gs.hands.every(h => h.length === 0)) {
       gs.nextDealerTurn = (playerId + 1) % gs.numPlayers;
+      gs.currentTurn = -1;
       setTimeout(() => this.endRound(), 1000);
+      this.broadcastGameState(); this.renderGame();
     } else {
       this.nextTurn();
     }
@@ -979,7 +1052,7 @@ const app = {
     gs.totalRounds = 1 + Math.ceil((40 - 4 - gs.numPlayers * 3) / (gs.numPlayers * 3));
     gs.phase = 'playing'; gs.deck = shuffle(createDeck());
     gs.capturedTeams = [[], []]; gs.shkobbaCount = [0, 0]; gs.lastCaptureTeam = -1;
-    gs.tableCards = []; gs.roundNum = 0; this.dealRound();
+    gs.tableCards = []; gs.roundNum = 0; gs.lastCapture = null; this.dealRound();
   },
 
   // ========== NETWORKING ==========
@@ -1024,6 +1097,7 @@ const app = {
       turnTimerDuration: gs.turnTimerDuration || 0,
       nextDealerTurn: gs.nextDealerTurn !== undefined ? gs.nextDealerTurn : -1,
       diamondOwnership: this.getDiamondOwnership(),
+      lastCapture: gs.lastCapture || null,
     };
   },
 
@@ -1068,6 +1142,7 @@ const app = {
       turnTimerDuration: data.turnTimerDuration || 0,
       nextDealerTurn: data.nextDealerTurn !== -1 ? data.nextDealerTurn : undefined,
       diamondOwnership: data.diamondOwnership || {},
+      lastCapture: data.lastCapture || null,
     };
 
     this.selectedCardIndex = -1;
@@ -1137,9 +1212,11 @@ const app = {
     if (!card) return;
     this.selectedCaptureIndices = [];
     this.availableCaptures = findCaptureCombinations(gs.tableCards, card.value);
-    if (gs.forceCapture && this.availableCaptures.length > 0 && gs.tableCards.length > 0) {
-      this.toast('Must capture! Select table cards and click Capture.');
-      return;
+    if (gs.forceCapture && gs.tableCards.length > 0) {
+      if (hasDirectMatch(this.myHand, gs.tableCards)) {
+        this.toast('Must capture the matching card!');
+        return;
+      }
     }
     this.placeCard();
   },
@@ -1181,15 +1258,17 @@ const app = {
   placeCard() {
     const gs = this.gameState;
     if (this.selectedCardIndex === -1) return;
-    if (gs.forceCapture && this.availableCaptures.length > 0 && gs.tableCards.length > 0) {
-      this.toast('You must capture when possible!'); return;
+    if (gs.forceCapture && gs.tableCards.length > 0) {
+      if (hasDirectMatch(this.myHand, gs.tableCards)) {
+        this.toast('You must capture the matching card!'); return;
+      }
     }
     const card = this.myHand[this.selectedCardIndex];
     this.sendMove(card.id, []);
   },
 
   confirmCapture() {
-    if (this.selectedCardIndex === -1) return;
+    if (this.selectedCardIndex === -1) { this.toast('Select a card from your hand first'); return; }
     if (this.selectedCaptureIndices.length === 0) { this.toast('Select cards to capture'); return; }
     const card = this.myHand[this.selectedCardIndex];
     const gs = this.gameState;
@@ -1216,6 +1295,10 @@ const app = {
       if (this.isHost) {
         this.log('debug', 'sending move (host, direct)', { cardId, captureCardIds });
         this.handlePlay({ playerId: this.myPlayerId, cardId, captureCardIds });
+        if (this.isSubmittingMove) {
+          this.isSubmittingMove = false;
+          this.cancelSelection();
+        }
       } else if (this._roomRef) {
         this.log('debug', 'sending move (push to Firebase)', { cardId, captureCardIds });
         this._roomRef.child('moves').push({
@@ -1264,12 +1347,12 @@ const app = {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById('game-view').classList.add('active');
 
-    this.renderHeader();
-    this.renderOpponents();
-    this.renderTable();
-    this.renderHand();
-    this.updateDebugPanel();
-    if (this.controlsOpen) this.renderControlsContent();
+    try { this.renderHeader(); } catch (e) { this.log('error', 'renderHeader:', e.message); }
+    try { this.renderOpponents(); } catch (e) { this.log('error', 'renderOpponents:', e.message); }
+    try { this.renderTable(); } catch (e) { this.log('error', 'renderTable:', e.message); }
+    try { this.renderHand(); } catch (e) { this.log('error', 'renderHand:', e.message); }
+    try { this.updateDebugPanel(); } catch (e) { /* silent */ }
+    try { if (this.controlsOpen) this.renderControlsContent(); } catch (e) { /* silent */ }
 
     // Reset animateDeal after rendering
     this.animateDeal = false;
@@ -1298,6 +1381,19 @@ const app = {
     const t2El = document.getElementById('score-t2');
     t1El.querySelector('.score-value').textContent = gs.scores[0];
     t2El.querySelector('.score-value').textContent = gs.scores[1];
+
+    const shk0 = gs.shkobbaCount ? gs.shkobbaCount[0] : 0;
+    const shk1 = gs.shkobbaCount ? gs.shkobbaCount[1] : 0;
+    let shkBadge1 = t1El.querySelector('.shkobba-badge');
+    let shkBadge2 = t2El.querySelector('.shkobba-badge');
+    if (shk0 > 0) {
+      if (!shkBadge1) { shkBadge1 = document.createElement('span'); shkBadge1.className = 'shkobba-badge'; t1El.appendChild(shkBadge1); }
+      shkBadge1.textContent = `+${shk0}`;
+    } else if (shkBadge1) { shkBadge1.remove(); }
+    if (shk1 > 0) {
+      if (!shkBadge2) { shkBadge2 = document.createElement('span'); shkBadge2.className = 'shkobba-badge'; t2El.appendChild(shkBadge2); }
+      shkBadge2.textContent = `+${shk1}`;
+    } else if (shkBadge2) { shkBadge2.remove(); }
   },
 
   renderOpponents() {
@@ -1362,6 +1458,7 @@ const app = {
       msgEl.textContent = gs.phase === 'playing' ? 'Table is empty' : '';
       hintEl.classList.add('hidden');
       this.updateShkobbaAnnounce(gs);
+      this.renderLastCapture(gs);
       return;
     }
 
@@ -1379,18 +1476,56 @@ const app = {
     hintEl.classList.toggle('hidden', !showHint);
     if (showHint) {
       const card = this.myHand[this.selectedCardIndex];
-      hintEl.textContent = this.availableCaptures.length > 0
-        ? `Select table cards that sum to ${card.display}=${card.value}`
-        : 'No capture possible. Click "Place".';
+      if (this.availableCaptures.length > 0) {
+        hintEl.textContent = `Select table cards that sum to ${card.display}=${card.value}`;
+      } else if (gs.forceCapture && gs.tableCards.length > 0 && hasDirectMatch(this.myHand, gs.tableCards)) {
+        hintEl.textContent = 'A matching card exists. Pick the highlighted card.';
+      } else {
+        hintEl.textContent = 'No capture possible. Click "Place".';
+      }
     }
 
     this.updateShkobbaAnnounce(gs);
+    this.renderLastCapture(gs);
+  },
+
+  renderLastCapture(gs) {
+    let el = document.getElementById('last-capture-info');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'last-capture-info';
+      el.className = 'last-capture-info';
+      const tableArea = document.getElementById('table-area');
+      if (tableArea) tableArea.appendChild(el);
+    }
+    const lc = gs.lastCapture;
+    if (!lc) { el.classList.add('hidden'); return; }
+    const playedImg = getCardImage(lc.playedCard);
+    const capturedHtml = lc.capturedCards.map(c =>
+      `<div class="lc-cap-card"><img src="${getCardImage(c)}" alt="${escapeHtml(c.display)}" onerror="app.onCardImgError(this)"></div>`
+    ).join('');
+    el.innerHTML = `
+      <div class="lc-label team${lc.teamIndex + 1}">${escapeHtml(lc.playerName)}</div>
+      <div class="lc-played-card"><img src="${playedImg}" alt="${escapeHtml(lc.playedCard.display)}" onerror="app.onCardImgError(this)"></div>
+      <div class="lc-arrow">&#9660;</div>
+      <div class="lc-captured-cards">${capturedHtml}</div>
+    `;
+    el.classList.remove('hidden');
   },
 
   updateShkobbaAnnounce(gs) {
     const el = document.getElementById('shkobba-announce');
-    if (gs.shkobbaThisTurn) { el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 2500); }
-    else el.classList.add('hidden');
+    if (gs.shkobbaThisTurn) {
+      const team = gs.shkobbaCount[0] > (this._lastShkobbaCount0 || 0) ? 0 : 1;
+      el.textContent = `Shkobba! T${team + 1} +${gs.shkobbaCount[team]}`;
+      el.classList.remove('hidden');
+      if (this._shkobbaTimeout) clearTimeout(this._shkobbaTimeout);
+      this._shkobbaTimeout = setTimeout(() => { el.classList.add('hidden'); this._shkobbaTimeout = null; }, 2500);
+      this._lastShkobbaCount0 = gs.shkobbaCount[0];
+      this._lastShkobbaCount1 = gs.shkobbaCount[1];
+    } else if (!this._shkobbaTimeout) {
+      el.classList.add('hidden');
+    }
   },
 
   renderHand() {
@@ -1426,11 +1561,19 @@ const app = {
       return;
     }
 
+    const forceActive = isMyTurn && gs.forceCapture && gs.tableCards && gs.tableCards.length > 0;
+    const cardCanCapture = forceActive
+      ? this.myHand.map(c => gs.tableCards.some(tc => tc.value === c.value))
+      : null;
+    const anyCanCapture = cardCanCapture ? cardCanCapture.some(Boolean) : false;
+
     handEl.innerHTML = this.myHand.map((card, i) => {
       const isSelected = this.selectedCardIndex === i;
       let cls = 'card';
       if (isMyTurn) cls += ' selectable';
       if (isSelected) cls += ' selected';
+      if (anyCanCapture && cardCanCapture[i]) cls += ' can-capture';
+      if (anyCanCapture && !cardCanCapture[i]) cls += ' no-capture';
 
       const animClass = (this.animationsEnabled && this.animateDeal) ? ' deal-animate' : '';
       const animStyle = (this.animationsEnabled && this.animateDeal) ? ` style="animation-delay: ${i * 0.12}s"` : '';
@@ -1528,7 +1671,7 @@ const app = {
     detailsEl.innerHTML = detailsHtml;
 
     if (isGameOver) {
-      actionsEl.innerHTML = `<button class="btn btn-primary" onclick="app.backToLobby()">Back to Menu</button>`;
+      actionsEl.innerHTML = `<button class="btn btn-primary" onclick="app.rematch()" style="margin-right:0.5rem;">Rematch</button><button class="btn btn-secondary" onclick="app.backToLobby()">Back to Menu</button>`;
     } else {
       if (this.isHost) {
         actionsEl.innerHTML = `<button class="btn btn-primary" onclick="app.startNextRound()">Start Next Round</button>`;
@@ -1894,10 +2037,38 @@ const app = {
     this.toggleControls();
   },
 
+  // ========== EMOTES ==========
+  sendEmote(emote) {
+    const emotes = { gg: 'GG! \u{1F44F}', nice: 'Nice! \u{1F525}', wow: 'Wow! \u{1F632}', oops: 'Oops! \u{1F605}', hurry: 'Hurry up! ⏰' };
+    const text = emotes[emote] || emote;
+    const el = document.getElementById('emote-display');
+    if (!el) return;
+    const myPlayer = this.gameState && this.gameState.players ? this.gameState.players.find(p => p.id === this.myPlayerId) : null;
+    const name = myPlayer ? myPlayer.name : this.myName;
+    el.textContent = `${name}: ${text}`;
+    el.classList.remove('hidden');
+    if (this._emoteTimeout) clearTimeout(this._emoteTimeout);
+    this._emoteTimeout = setTimeout(() => { el.classList.add('hidden'); this._emoteTimeout = null; }, 2000);
+    this.playSound('click');
+    if (this._roomRef) {
+      this._roomRef.child('emote').set({ name, text, ts: Date.now() });
+    }
+  },
+
+  // ========== REMATCH ==========
+  rematch() {
+    if (!this.isHost) { this.toast('Only the host can start a rematch'); return; }
+    const modal = document.getElementById('score-modal');
+    if (modal) modal.classList.add('hidden');
+    this.startGame();
+    this.toast('Rematch started!');
+  },
+
   // ========== DEBUG MODE ==========
   debugEnabled: false,
 
   toggleDebug() {
+    if (!this.isHost) { this.toast('Debug is host-only'); return; }
     this.debugEnabled = !this.debugEnabled;
     this.log('info', 'debug mode', this.debugEnabled ? 'ON (verbose logging enabled)' : 'OFF');
     const panel = document.getElementById('debug-panel');
@@ -2078,7 +2249,20 @@ const app = {
       playerOpts += `<option value="${p.id}">P${p.id} ${escapeHtml(p.name)}</option>`;
     });
 
+    const capT1 = gs.capturedTeams[0] ? gs.capturedTeams[0].length : 0;
+    const capT2 = gs.capturedTeams[1] ? gs.capturedTeams[1].length : 0;
+
     return `
+      <div class="debug-section">
+        <div class="debug-section-title">Undo / History</div>
+        <div class="debug-controls">
+          <button class="btn-debug" onclick="app.debugUndo()">↩ Undo Last Move</button>
+          <button class="btn-debug" onclick="app.debugRerunRound()">🔄 Rerun This Round</button>
+          <button class="btn-debug" onclick="app.debugSaveState()">💾 Save Snapshot</button>
+          <button class="btn-debug" onclick="app.debugLoadState()">📂 Load Snapshot</button>
+        </div>
+      </div>
+
       <div class="debug-section">
         <div class="debug-section-title">Turn Control</div>
         <div class="debug-controls">
@@ -2087,19 +2271,45 @@ const app = {
             <button class="btn-debug" onclick="app.debugSetTurn()">Set Turn</button>
           </div>
           <button class="btn-debug" onclick="app.debugSkipTurn()">⏭ Skip Turn</button>
+          <button class="btn-debug" onclick="app.debugPauseTurn()">⏸ Pause Timer</button>
         </div>
       </div>
 
       <div class="debug-section">
-        <div class="debug-section-title">Score Control</div>
+        <div class="debug-section-title">Score & Shkobba</div>
         <div class="debug-controls">
           <div class="debug-controls-row">
-            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:50px;">Team 1:</label>
-            <input type="number" id="debug-score-t1" class="debug-select" value="${gs.scores[0]}" min="0" style="width:60px;">
-            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:50px;">Team 2:</label>
-            <input type="number" id="debug-score-t2" class="debug-select" value="${gs.scores[1]}" min="0" style="width:60px;">
+            <label style="font-size:0.72rem;color:var(--team1);min-width:30px;">T1:</label>
+            <input type="number" id="debug-score-t1" class="debug-select" value="${gs.scores[0]}" min="0" style="width:50px;">
+            <label style="font-size:0.72rem;color:var(--team2);min-width:30px;">T2:</label>
+            <input type="number" id="debug-score-t2" class="debug-select" value="${gs.scores[1]}" min="0" style="width:50px;">
+            <button class="btn-debug" onclick="app.debugSetScores()">Set</button>
           </div>
-          <button class="btn-debug" onclick="app.debugSetScores()">Set Scores</button>
+          <div class="debug-controls-row">
+            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Shkobba T1:</label>
+            <input type="number" id="debug-shk-t1" class="debug-select" value="${gs.shkobbaCount[0]}" min="0" style="width:50px;">
+            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Shkobba T2:</label>
+            <input type="number" id="debug-shk-t2" class="debug-select" value="${gs.shkobbaCount[1]}" min="0" style="width:50px;">
+            <button class="btn-debug" onclick="app.debugSetShkobba()">Set</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="debug-section">
+        <div class="debug-section-title">Move Cards Between Zones</div>
+        <div class="debug-controls">
+          <div class="debug-controls-row">
+            <button class="btn-debug" onclick="app.debugTableToHand()">Table → Hand</button>
+            <button class="btn-debug" onclick="app.debugHandToTable()">Hand → Table</button>
+          </div>
+          <div class="debug-controls-row">
+            <button class="btn-debug" onclick="app.debugSwapHands()">🔄 Swap Hands</button>
+            <button class="btn-debug" onclick="app.debugClearTable()">🗑 Clear Table</button>
+          </div>
+          <div class="debug-controls-row">
+            <button class="btn-debug" onclick="app.debugReturnCaptures(0)">Return T1 Captures</button>
+            <button class="btn-debug" onclick="app.debugReturnCaptures(1)">Return T2 Captures</button>
+          </div>
         </div>
       </div>
 
@@ -2107,23 +2317,28 @@ const app = {
         <div class="debug-section-title">Game Actions</div>
         <div class="debug-controls">
           <button class="btn-debug" onclick="app.debugDealRound()">📤 Force Deal Round</button>
-          <button class="btn-debug" onclick="app.debugShowWinner()">🏆 Force Win (Team 1)</button>
-          <button class="btn-debug danger" onclick="app.debugShowWinner(1)">🏆 Force Win (Team 2)</button>
+          <button class="btn-debug" onclick="app.debugForceScoring()">📊 Force Score Now</button>
+          <div class="debug-controls-row" style="margin-top:0.3rem;">
+            <button class="btn-debug" onclick="app.debugShowWinner()">🏆 Win T1</button>
+            <button class="btn-debug danger" onclick="app.debugShowWinner(1)">🏆 Win T2</button>
+          </div>
+          <div class="debug-controls-row" style="margin-top:0.3rem;">
+            <button class="btn-debug" onclick="app.debugToggleForceCapture()">⚡ Toggle Force Capture (${gs.forceCapture ? 'ON' : 'OFF'})</button>
+          </div>
+          <div class="debug-controls-row" style="margin-top:0.3rem;">
+            <button class="btn-debug" onclick="app.debugResetGame()">🔥 Full Reset (Keep Players)</button>
+          </div>
         </div>
       </div>
 
       <div class="debug-section">
         <div class="debug-section-title">State Info</div>
         <div style="font-size:0.7rem;color:var(--text-secondary);line-height:1.6;font-family:monospace;">
-          <div>Phase: ${gs.phase}</div>
-          <div>Current Turn: P${gs.currentTurn}</div>
-          <div>Dealer: P${gs.dealerIndex}</div>
-          <div>Deck: ${(gs.deck || []).length} cards</div>
-          <div>Table: ${(gs.tableCards || []).length} cards</div>
-          <div>Last Capture: Team ${gs.lastCaptureTeam + 1}</div>
-          <div>Shkobba: [${gs.shkobbaCount.join(', ')}]</div>
-          <div>Force Capture: ${gs.forceCapture}</div>
-          <div>Timer: ${gs.turnTimerDuration || 'Off'}s</div>
+          <div>Phase: ${gs.phase} | Turn: P${gs.currentTurn} | Dealer: P${gs.dealerIndex}</div>
+          <div>Deck: ${(gs.deck || []).length} | Table: ${(gs.tableCards || []).length} | Round: ${gs.roundNum + 1}/${gs.totalRounds}</div>
+          <div>Captured: T1=${capT1} T2=${capT2} | Last Cap: T${gs.lastCaptureTeam + 1}</div>
+          <div>Shkobba: T1=${gs.shkobbaCount[0]} T2=${gs.shkobbaCount[1]} | Scores: ${gs.scores[0]}-${gs.scores[1]}</div>
+          <div>Force: ${gs.forceCapture ? 'ON' : 'OFF'} | Timer: ${gs.turnTimerDuration || 'Off'}s | Win: ${gs.winScore}</div>
         </div>
       </div>
     `;
@@ -2266,6 +2481,190 @@ const app = {
     this.broadcastGameState();
     this.renderGame();
     this.showScoreboard();
+    this.updateDebugPanel();
+  },
+
+  _stateHistory: [],
+  _savedSnapshot: null,
+
+  _pushHistory() {
+    const gs = this.gameState;
+    if (!gs) return;
+    const snap = JSON.stringify({
+      hands: gs.hands, tableCards: gs.tableCards, deck: gs.deck,
+      capturedTeams: gs.capturedTeams, currentTurn: gs.currentTurn,
+      dealerIndex: gs.dealerIndex, roundNum: gs.roundNum,
+      shkobbaCount: gs.shkobbaCount, scores: gs.scores,
+      lastCaptureTeam: gs.lastCaptureTeam, phase: gs.phase,
+      cardsPlayedThisRound: gs.cardsPlayedThisRound,
+      shkobbaThisTurn: gs.shkobbaThisTurn, lastCapture: gs.lastCapture,
+      forceCapture: gs.forceCapture,
+    });
+    this._stateHistory.push(snap);
+    if (this._stateHistory.length > 50) this._stateHistory.shift();
+  },
+
+  debugUndo() {
+    if (!this.isHost || !this.gameState) { this.toast('No game'); return; }
+    if (this._stateHistory.length === 0) { this.toast('Nothing to undo'); return; }
+    const snap = JSON.parse(this._stateHistory.pop());
+    Object.assign(this.gameState, snap);
+    this.toast('Undid last move');
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+    this.startTurnTimer();
+  },
+
+  debugRerunRound() {
+    if (!this.isHost || !this.gameState) { this.toast('No game'); return; }
+    const gs = this.gameState;
+    gs.capturedTeams = [[], []];
+    gs.shkobbaCount = [0, 0];
+    gs.lastCaptureTeam = -1;
+    gs.lastCapture = null;
+    gs.tableCards = [];
+    gs.roundNum = 0;
+    gs.deck = shuffle(createDeck());
+    gs.phase = 'playing';
+    const modal = document.getElementById('score-modal');
+    if (modal) modal.classList.add('hidden');
+    this.dealRound();
+    this.toast('Round restarted!');
+    this.updateDebugPanel();
+  },
+
+  debugSaveState() {
+    if (!this.isHost || !this.gameState) { this.toast('No game'); return; }
+    this._savedSnapshot = JSON.stringify(this.gameState);
+    this.toast('Snapshot saved!');
+  },
+
+  debugLoadState() {
+    if (!this.isHost) { this.toast('Host only'); return; }
+    if (!this._savedSnapshot) { this.toast('No snapshot saved'); return; }
+    const snap = JSON.parse(this._savedSnapshot);
+    this.gameState = snap;
+    const modal = document.getElementById('score-modal');
+    if (modal) modal.classList.add('hidden');
+    this.broadcastGameState();
+    this.renderGame();
+    this.startTurnTimer();
+    this.toast('Snapshot loaded!');
+    this.updateDebugPanel();
+  },
+
+  debugPauseTurn() {
+    this.stopTurnTimer();
+    this.toast('Timer paused');
+  },
+
+  debugSetShkobba() {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) { this.toast('Host only'); return; }
+    const s1 = parseInt(document.getElementById('debug-shk-t1')?.value || 0);
+    const s2 = parseInt(document.getElementById('debug-shk-t2')?.value || 0);
+    gs.shkobbaCount[0] = isNaN(s1) ? 0 : s1;
+    gs.shkobbaCount[1] = isNaN(s2) ? 0 : s2;
+    this.toast(`Shkobba set: T1=${gs.shkobbaCount[0]}, T2=${gs.shkobbaCount[1]}`);
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugTableToHand() {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) { this.toast('Host only'); return; }
+    if (gs.tableCards.length === 0) { this.toast('Table is empty'); return; }
+    const card = gs.tableCards.pop();
+    const pid = gs.currentTurn >= 0 ? gs.currentTurn : 0;
+    gs.hands[pid].push(card);
+    this.toast(`Moved ${card.display} from table to P${pid}'s hand`);
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugHandToTable() {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) { this.toast('Host only'); return; }
+    const pid = gs.currentTurn >= 0 ? gs.currentTurn : 0;
+    const hand = gs.hands[pid];
+    if (!hand || hand.length === 0) { this.toast('Hand is empty'); return; }
+    const card = hand.pop();
+    gs.tableCards.push(card);
+    this.toast(`Moved ${card.display} from P${pid}'s hand to table`);
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugSwapHands() {
+    const gs = this.gameState;
+    if (!gs || !this.isHost || gs.numPlayers < 2) return;
+    [gs.hands[0], gs.hands[1]] = [gs.hands[1], gs.hands[0]];
+    this.toast('Hands swapped between P0 and P1');
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugClearTable() {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) return;
+    const count = gs.tableCards.length;
+    gs.tableCards = [];
+    this.toast(`Cleared ${count} cards from table`);
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugReturnCaptures(teamIndex) {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) return;
+    const cards = gs.capturedTeams[teamIndex];
+    if (!cards || cards.length === 0) { this.toast('No captures to return'); return; }
+    gs.deck.push(...cards);
+    shuffle(gs.deck);
+    const count = cards.length;
+    gs.capturedTeams[teamIndex] = [];
+    this.toast(`Returned ${count} cards from T${teamIndex + 1} captures to deck`);
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugForceScoring() {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) return;
+    if (gs.tableCards.length > 0 && gs.lastCaptureTeam >= 0) {
+      gs.capturedTeams[gs.lastCaptureTeam].push(...gs.tableCards);
+      gs.tableCards = [];
+    }
+    this.calculateScores();
+    this.toast('Forced scoring!');
+    this.updateDebugPanel();
+  },
+
+  debugToggleForceCapture() {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) return;
+    gs.forceCapture = !gs.forceCapture;
+    this.forceCapture = gs.forceCapture;
+    this.toast('Force capture ' + (gs.forceCapture ? 'ON' : 'OFF'));
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugResetGame() {
+    if (!this.isHost) return;
+    const modal = document.getElementById('score-modal');
+    if (modal) modal.classList.add('hidden');
+    this._stateHistory = [];
+    this.startGame();
+    this.toast('Game fully reset!');
     this.updateDebugPanel();
   },
 };

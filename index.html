@@ -33,18 +33,40 @@
           <div class="select-group">
             <label for="win-score">Win</label>
             <select id="win-score" class="select">
+              <option value="5">5</option>
               <option value="11">11</option>
               <option value="21" selected>21</option>
+              <option value="31">31</option>
             </select>
           </div>
           <div class="select-group">
             <label for="turn-timer">Timer</label>
             <select id="turn-timer" class="select">
               <option value="0">Off</option>
+              <option value="10">10s</option>
               <option value="15">15s</option>
               <option value="30" selected>30s</option>
               <option value="45">45s</option>
               <option value="60">60s</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="select-group">
+            <label for="bot-difficulty">Bot</label>
+            <select id="bot-difficulty" class="select">
+              <option value="easy">Easy</option>
+              <option value="medium" selected>Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
+          <div class="select-group">
+            <label for="game-speed">Speed</label>
+            <select id="game-speed" class="select">
+              <option value="slow">Slow</option>
+              <option value="normal" selected>Normal</option>
+              <option value="fast">Fast</option>
             </select>
           </div>
         </div>
@@ -56,12 +78,7 @@
           </label>
         </div>
 
-        <div class="toggle-group">
-          <label class="toggle-label">
-            <input type="checkbox" id="debug-toggle" onchange="app.toggleDebug()">
-            <span style="color:var(--gold);">Debug Mode</span>
-          </label>
-        </div>
+        <input type="checkbox" id="debug-toggle" style="display:none" onchange="app.toggleDebug()">
 
         <button id="create-game-btn" class="btn btn-primary btn-big" onclick="app.createGame()">Create Game</button>
         <button class="btn btn-secondary btn-big" onclick="app.playVsBot()" style="margin-top:0.6rem;">Play vs Bot</button>
@@ -169,8 +186,16 @@
             <button id="btn-capture" class="btn-action btn-action-capture" onclick="app.confirmCapture()">Capture</button>
             <button id="btn-cancel" class="btn-action btn-action-cancel" onclick="app.cancelSelection()">Cancel</button>
           </div>
+          <div id="emote-bar" class="emote-bar">
+            <button class="emote-btn" onclick="app.sendEmote('gg')">GG</button>
+            <button class="emote-btn" onclick="app.sendEmote('nice')">Nice!</button>
+            <button class="emote-btn" onclick="app.sendEmote('wow')">Wow</button>
+            <button class="emote-btn" onclick="app.sendEmote('oops')">Oops</button>
+            <button class="emote-btn" onclick="app.sendEmote('hurry')">Hurry!</button>
+          </div>
         </div>
       </div>
+      <div id="emote-display" class="emote-display hidden"></div>
 
       <!-- Scoreboard Modal (Round End / Game Over) -->
       <div id="score-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="score-title">
