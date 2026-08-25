@@ -412,6 +412,19 @@ const app = {
         this._playerListeners.push(hostRef);
 
         this.showPlayerConnected();
+
+        const joinPlayersRef = this._roomRef.child('players');
+        joinPlayersRef.on('value', (snap) => {
+          const pdata = snap.val() || {};
+          this.playerList = [];
+          const pc = playerCount;
+          for (let i = 0; i < pc; i++) {
+            if (pdata[i]) this.playerList.push(pdata[i]);
+          }
+          this.playerCount = pc;
+          this.renderConnectedPlayers();
+        });
+        this._playerListeners.push(joinPlayersRef);
       });
     }).catch((err) => {
       this.log('error', 'join failed (room read):', err);
@@ -433,21 +446,81 @@ const app = {
     document.getElementById('connected-room').textContent = this.roomCode;
   },
 
+  renderConnectedPlayers() {
+    const el = document.getElementById('connected-players');
+    if (!el) return;
+    const players = this.playerList || [];
+    if (players.length === 0) return;
+
+    if (this.playerCount === 4) {
+      const team1 = [], team2 = [];
+      players.forEach((name, i) => {
+        if (i % 2 === 0) team1.push({ name, slot: i });
+        else team2.push({ name, slot: i });
+      });
+      el.innerHTML =
+        '<div class="team-groups">' +
+        '<div class="team-group"><div class="team-label" style="color:var(--team1)">Team 1</div>' +
+        team1.map(p => `<div class="player-chip"><span class="dot team1"></span>${escapeHtml(p.name)}${p.slot === this.myPlayerId ? ' (You)' : ''}${p.slot === 0 ? ' ★' : ''}</div>`).join('') +
+        '</div><div class="team-group"><div class="team-label" style="color:var(--team2)">Team 2</div>' +
+        team2.map(p => `<div class="player-chip"><span class="dot team2"></span>${escapeHtml(p.name)}${p.slot === this.myPlayerId ? ' (You)' : ''}${p.slot === 0 ? ' ★' : ''}</div>`).join('') +
+        '</div></div>';
+    } else {
+      el.innerHTML = players.map((name, i) =>
+        `<div class="player-chip">${escapeHtml(name)}${i === this.myPlayerId ? ' (You)' : ''}${i === 0 ? ' (Host)' : ''}</div>`
+      ).join('');
+    }
+  },
+
   renderWaiting() {
     const list = document.getElementById('waiting-players');
     const players = this.playerList || [];
-    list.innerHTML = players.map((name, i) => {
-      const dotClass = this.playerCount === 4 ? (i % 2 === 0 ? 'team1' : 'team2') : '';
-      return `<div class="player-chip"><span class="dot ${dotClass}"></span>${escapeHtml(name)} ${i === 0 ? '(Host)' : ''}</div>`;
-    }).join('');
+
+    if (this.playerCount === 4) {
+      const team1 = [], team2 = [];
+      players.forEach((name, i) => {
+        if (i % 2 === 0) team1.push({ name, slot: i });
+        else team2.push({ name, slot: i });
+      });
+      const swapBtn = (slot) => this.isHost && slot !== 0 ? ` <button class="btn-swap" onclick="app.swapPlayers(${slot})">&#8596;</button>` : '';
+      list.innerHTML =
+        '<div class="team-groups">' +
+        '<div class="team-group"><div class="team-label" style="color:var(--team1)">Team 1</div>' +
+        team1.map(p => `<div class="player-chip"><span class="dot team1"></span>${escapeHtml(p.name)}${p.slot === 0 ? ' (Host)' : ''}${swapBtn(p.slot)}</div>`).join('') +
+        '</div><div class="team-group"><div class="team-label" style="color:var(--team2)">Team 2</div>' +
+        team2.map(p => `<div class="player-chip"><span class="dot team2"></span>${escapeHtml(p.name)}${swapBtn(p.slot)}</div>`).join('') +
+        '</div></div>';
+    } else {
+      list.innerHTML = players.map((name, i) => {
+        return `<div class="player-chip"><span class="dot"></span>${escapeHtml(name)} ${i === 0 ? '(Host)' : ''}</div>`;
+      }).join('');
+    }
 
     const btn = document.getElementById('start-game-btn');
     if (this.isHost) {
       const ready = players.length >= this.playerCount && !this._roomStarted;
-      btn.classList.toggle('hidden', !ready);
-      btn.textContent = ready ? 'Start Game' : players.length >= this.playerCount ? 'Starting...' : 'Waiting for players...';
-      if (!ready) btn.disabled = true; else btn.disabled = false;
+      btn.classList.remove('hidden');
+      btn.disabled = !ready;
+      const remaining = this.playerCount - players.length;
+      if (this._roomStarted) btn.textContent = 'Starting...';
+      else if (remaining > 0) btn.textContent = `Waiting for ${remaining} more player${remaining !== 1 ? 's' : ''}...`;
+      else btn.textContent = 'Start Game';
     }
+  },
+
+  swapPlayers(slot) {
+    if (!this.isHost || this.playerCount !== 4 || slot === 0) return;
+    const target = slot === 2 ? 1 : 2;
+    this._roomRef.child('players').transaction(current => {
+      if (!current) return current;
+      const p = {};
+      for (let i = 0; i < 4; i++) if (current[i]) p[i] = current[i];
+      if (!p[slot] || !p[target]) return;
+      const tmp = p[slot];
+      p[slot] = p[target];
+      p[target] = tmp;
+      return p;
+    });
   },
 
   copyRoomLink() {

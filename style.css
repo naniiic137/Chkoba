@@ -481,6 +481,67 @@ body::after {
 .player-chip .dot.team1 { background: var(--team1); color: var(--team1); }
 .player-chip .dot.team2 { background: var(--team2); color: var(--team2); }
 
+.team-groups {
+  display: flex;
+  gap: 1.2rem;
+  justify-content: center;
+  margin-bottom: 1.4rem;
+  width: 100%;
+}
+
+.team-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem;
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-subtle);
+}
+
+.team-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.2rem;
+}
+
+.btn-swap {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text-secondary);
+  border-radius: 50%;
+  width: 26px;
+  height: 26px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.4rem;
+  transition: all 0.2s;
+  padding: 0;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.btn-swap:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: var(--gold);
+  color: var(--gold);
+  transform: scale(1.1);
+}
+
+@media (max-width: 480px) {
+  .team-groups {
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+}
+
 .loading-spinner {
   width: 44px;
   height: 44px;
