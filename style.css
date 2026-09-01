@@ -535,6 +535,60 @@ body::after {
   transform: scale(1.1);
 }
 
+.btn-add-bot {
+  border-radius: 12px;
+  width: auto;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: rgba(102, 187, 106, 0.15);
+  border-color: rgba(102, 187, 106, 0.4);
+  color: var(--success);
+}
+.btn-add-bot:hover {
+  background: rgba(102, 187, 106, 0.3);
+  border-color: var(--success);
+  color: #fff;
+}
+
+.btn-remove-bot {
+  font-size: 0.7rem;
+  width: 22px;
+  height: 22px;
+  background: rgba(239, 83, 80, 0.15);
+  border-color: rgba(239, 83, 80, 0.4);
+  color: var(--danger);
+}
+.btn-remove-bot:hover {
+  background: rgba(239, 83, 80, 0.3);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.empty-slot {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+.bot-badge {
+  display: inline-block;
+  background: rgba(102, 187, 106, 0.2);
+  color: var(--success);
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  vertical-align: middle;
+}
+
+.bot-avatar-icon {
+  font-size: 0.5rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: var(--success);
+}
+
 @media (max-width: 480px) {
   .team-groups {
     flex-direction: column;

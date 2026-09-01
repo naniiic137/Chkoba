@@ -148,6 +148,8 @@ const app = {
   _playerListeners: [],
   _moveCallback: null,
   _roomStarted: false,
+  _botPlayers: {},
+  _playerSlots: {},
 
   // ========== LOGGING ==========
   // Leveled logger. error/warn always print; info/debug print only in verbose mode
@@ -239,6 +241,8 @@ const app = {
     this.myPlayerId = 0;
     this.playerList = [this.myName];
     this.moveLog = [];
+    this._botPlayers = {};
+    this._playerSlots = { 0: this.myName };
 
     // Create room in Firebase
     this._roomRef = this._db.ref('rooms/' + this.roomCode);
@@ -271,6 +275,7 @@ const app = {
       const playersRef = this._roomRef.child('players');
       playersRef.on('value', (snap) => {
         const players = snap.val() || {};
+        this._playerSlots = players;
         this.playerList = [];
         for (let i = 0; i < this.playerCount; i++) {
           if (players[i]) this.playerList.push(players[i]);
@@ -475,25 +480,44 @@ const app = {
   renderWaiting() {
     const list = document.getElementById('waiting-players');
     const players = this.playerList || [];
+    const slots = this._playerSlots || {};
 
     if (this.playerCount === 4) {
-      const team1 = [], team2 = [];
-      players.forEach((name, i) => {
-        if (i % 2 === 0) team1.push({ name, slot: i });
-        else team2.push({ name, slot: i });
-      });
-      const swapBtn = (slot) => this.isHost && slot !== 0 ? ` <button class="btn-swap" onclick="app.swapPlayers(${slot})">&#8596;</button>` : '';
+      const renderSlot = (slot, teamClass) => {
+        if (slots[slot]) {
+          const isBot = !!this._botPlayers[slot];
+          const isHostSlot = slot === 0;
+          const swapBtn = this.isHost && !isHostSlot ? ` <button class="btn-swap" onclick="app.swapPlayers(${slot})">&#8596;</button>` : '';
+          const removeBtn = this.isHost && isBot ? ` <button class="btn-swap btn-remove-bot" onclick="app.removeBotFromWaiting(${slot})" title="Remove bot">&#10005;</button>` : '';
+          return `<div class="player-chip"><span class="dot ${teamClass}"></span>${isBot ? '<span class="bot-badge">BOT</span> ' : ''}${escapeHtml(slots[slot])}${isHostSlot ? ' (Host)' : ''}${removeBtn}${swapBtn}</div>`;
+        }
+        if (this.isHost) {
+          return `<div class="player-chip empty-slot"><span class="dot ${teamClass}" style="opacity:0.3"></span><span style="color:var(--text-dim)">Empty</span> <button class="btn-swap btn-add-bot" onclick="app.addBotToWaiting(${slot})">+ Bot</button></div>`;
+        }
+        return `<div class="player-chip empty-slot"><span class="dot ${teamClass}" style="opacity:0.3"></span><span style="color:var(--text-dim)">Waiting...</span></div>`;
+      };
       list.innerHTML =
         '<div class="team-groups">' +
         '<div class="team-group"><div class="team-label" style="color:var(--team1)">Team 1</div>' +
-        team1.map(p => `<div class="player-chip"><span class="dot team1"></span>${escapeHtml(p.name)}${p.slot === 0 ? ' (Host)' : ''}${swapBtn(p.slot)}</div>`).join('') +
+        renderSlot(0, 'team1') + renderSlot(2, 'team1') +
         '</div><div class="team-group"><div class="team-label" style="color:var(--team2)">Team 2</div>' +
-        team2.map(p => `<div class="player-chip"><span class="dot team2"></span>${escapeHtml(p.name)}${swapBtn(p.slot)}</div>`).join('') +
+        renderSlot(1, 'team2') + renderSlot(3, 'team2') +
         '</div></div>';
     } else {
-      list.innerHTML = players.map((name, i) => {
-        return `<div class="player-chip"><span class="dot"></span>${escapeHtml(name)} ${i === 0 ? '(Host)' : ''}</div>`;
-      }).join('');
+      let html = '';
+      for (let slot = 0; slot < this.playerCount; slot++) {
+        if (slots[slot]) {
+          const isBot = !!this._botPlayers[slot];
+          const isHostSlot = slot === 0;
+          const removeBtn = this.isHost && isBot ? ` <button class="btn-swap btn-remove-bot" onclick="app.removeBotFromWaiting(${slot})" title="Remove bot">&#10005;</button>` : '';
+          html += `<div class="player-chip"><span class="dot"></span>${isBot ? '<span class="bot-badge">BOT</span> ' : ''}${escapeHtml(slots[slot])}${isHostSlot ? ' (Host)' : ''}${removeBtn}</div>`;
+        } else if (this.isHost) {
+          html += `<div class="player-chip empty-slot"><span class="dot" style="opacity:0.3"></span><span style="color:var(--text-dim)">Empty</span> <button class="btn-swap btn-add-bot" onclick="app.addBotToWaiting(${slot})">+ Bot</button></div>`;
+        } else {
+          html += `<div class="player-chip empty-slot"><span class="dot" style="opacity:0.3"></span><span style="color:var(--text-dim)">Waiting...</span></div>`;
+        }
+      }
+      list.innerHTML = html;
     }
 
     const btn = document.getElementById('start-game-btn');
@@ -520,6 +544,15 @@ const app = {
       p[slot] = p[target];
       p[target] = tmp;
       return p;
+    }, (err, committed) => {
+      if (!err && committed) {
+        const slotBot = this._botPlayers[slot];
+        const targetBot = this._botPlayers[target];
+        delete this._botPlayers[slot];
+        delete this._botPlayers[target];
+        if (slotBot) this._botPlayers[target] = slotBot;
+        if (targetBot) this._botPlayers[slot] = targetBot;
+      }
     });
   },
 
@@ -540,6 +573,8 @@ const app = {
     this.gameState = null;
     this.myHand = [];
     this.playerList = [];
+    this._botPlayers = {};
+    this._playerSlots = {};
     this.stopTurnTimer();
     this.showLobby();
   },
@@ -557,6 +592,8 @@ const app = {
     this.availableCaptures = [];
     this.moveLog = [];
     this.playerList = [];
+    this._botPlayers = {};
+    this._playerSlots = {};
     this.stopTurnTimer();
     const modal = document.getElementById('score-modal');
     if (modal) modal.classList.add('hidden');
@@ -615,20 +652,76 @@ const app = {
     this.playerList = [this.myName, botNames[this.botDifficulty] || 'Bot'];
     this.moveLog = [];
     this._roomRef = null;
+    this._botPlayers = {};
+    this._playerSlots = {};
 
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     this.startGame();
   },
 
-  botPlay() {
-    if (!this._isBotGame || !this.isHost) return;
-    const gs = this.gameState;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== 1) return;
+  isBotPlayer(playerId) {
+    if (this._isBotGame && playerId === 1) return true;
+    return !!this._botPlayers[playerId];
+  },
 
-    const hand = gs.hands[1];
+  getBotDifficulty(playerId) {
+    if (this._isBotGame && playerId === 1) return this.botDifficulty || 'medium';
+    return this._botPlayers[playerId] || 'medium';
+  },
+
+  triggerBotPlay() {
+    if (!this.isHost || !this.gameState) return;
+    const gs = this.gameState;
+    if (gs.phase !== 'playing' || gs.currentTurn < 0) return;
+    if (this.isBotPlayer(gs.currentTurn)) {
+      this.botPlayForPlayer(gs.currentTurn);
+    }
+  },
+
+  addBotToWaiting(slot) {
+    if (!this.isHost || !this._roomRef) return;
+    if (this._playerSlots[slot]) { this.toast('Slot is taken'); return; }
+
+    const diff = document.getElementById('bot-difficulty').value || 'medium';
+    const botNames = { easy: 'Bot (Easy)', medium: 'Bot', hard: 'Bot (Hard)' };
+    let name = botNames[diff] || 'Bot';
+
+    const existing = Object.values(this._playerSlots).filter(Boolean);
+    let n = 2;
+    const base = name;
+    while (existing.includes(name)) { name = base + ' ' + n; n++; }
+
+    this._roomRef.child('players/' + slot).transaction(current => {
+      if (current) return;
+      return name;
+    }, (err, committed) => {
+      if (err || !committed) { this.toast('Slot was taken'); return; }
+      this._botPlayers[slot] = diff;
+      this.toast('Added ' + name);
+    });
+  },
+
+  removeBotFromWaiting(slot) {
+    if (!this.isHost || !this._roomRef) return;
+    if (!this._botPlayers[slot]) { this.toast('Not a bot'); return; }
+    this._roomRef.child('players/' + slot).remove();
+    delete this._botPlayers[slot];
+    this.toast('Bot removed');
+  },
+
+  botPlay() {
+    this.triggerBotPlay();
+  },
+
+  botPlayForPlayer(playerId) {
+    if (!this.isHost) return;
+    const gs = this.gameState;
+    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== playerId) return;
+
+    const hand = gs.hands[playerId];
     if (!hand || hand.length === 0) return;
 
-    const diff = this.botDifficulty || 'medium';
+    const diff = this.getBotDifficulty(playerId);
     let bestMove = null;
     let bestScore = -1;
 
@@ -690,7 +783,9 @@ const app = {
 
     const delays = { slow: 1200 + Math.random() * 800, normal: 600 + Math.random() * 800, fast: 200 + Math.random() * 300 };
     setTimeout(() => {
-      this.handlePlay({ playerId: 1, ...bestMove });
+      if (this.gameState && this.gameState.currentTurn === playerId) {
+        this.handlePlay({ playerId, ...bestMove });
+      }
     }, delays[this.gameSpeed] || delays.normal);
   },
 
@@ -745,7 +840,7 @@ const app = {
     this.broadcastGameState();
     this.renderGame();
     this.startTurnTimer();
-    if (this._isBotGame && gs.currentTurn === 1) this.botPlay();
+    this.triggerBotPlay();
   },
 
   // ========== TURN MANAGEMENT ==========
@@ -762,7 +857,7 @@ const app = {
     this.broadcastGameState();
     this.renderGame();
     this.startTurnTimer();
-    if (this._isBotGame && gs.currentTurn === 1) this.botPlay();
+    this.triggerBotPlay();
   },
 
   endRound() {
@@ -1491,6 +1586,7 @@ const app = {
   opponentHtml(player, gs) {
     if (!player) return '';
     const isTurn = gs.currentTurn === player.id;
+    const isBot = this.isHost && this.isBotPlayer(player.id);
     const capCount = gs.capturedCounts ? gs.capturedCounts[player.team] : (gs.capturedTeams ? gs.capturedTeams[player.team].length : 0);
     const handCards = gs.cardsPlayedThisRound ? 3 - (gs.cardsPlayedThisRound[player.id] || 0) : 3;
     const shkobbaCount = gs.shkobbaCount[player.team] || 0;
@@ -1499,8 +1595,10 @@ const app = {
       ? '<span class="hand-dots">' + '<span class="hand-dot"></span>'.repeat(handCards) + '</span>'
       : '<span class="opp-done">done</span>';
 
+    const avatarContent = isBot ? '<span class="bot-avatar-icon">BOT</span>' : escapeHtml(player.name.charAt(0).toUpperCase());
+
     return `<div class="opponent-card ${isTurn ? 'active-turn' : ''} team${player.team + 1}">
-      <div class="opp-avatar">${escapeHtml(player.name.charAt(0).toUpperCase())}</div>
+      <div class="opp-avatar">${avatarContent}</div>
       <div class="opp-details">
         <div class="opp-name">${escapeHtml(player.name)}</div>
         <div class="opp-stats">
@@ -2405,6 +2503,32 @@ const app = {
       </div>
 
       <div class="debug-section">
+        <div class="debug-section-title">Bot Management</div>
+        <div class="debug-controls">
+          ${gs.players.map(p => {
+            if (p.id === 0) return '';
+            const isBot = this.isBotPlayer(p.id);
+            if (isBot) {
+              return `<div class="debug-controls-row" style="align-items:center;">
+                <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
+                <span class="bot-badge" style="margin-left:0.3rem;">BOT</span>
+                <button class="btn-debug danger" onclick="app.debugRemoveBot(${p.id})" style="margin-left:auto;">Remove Bot</button>
+              </div>`;
+            }
+            return `<div class="debug-controls-row" style="align-items:center;">
+              <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
+              <select id="debug-bot-diff-${p.id}" class="debug-select" style="font-size:0.68rem;padding:0.2rem;width:70px;margin-left:auto;">
+                <option value="easy">Easy</option>
+                <option value="medium" selected>Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+              <button class="btn-debug" onclick="app.debugAddBot(${p.id})">+ Bot</button>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <div class="debug-section">
         <div class="debug-section-title">State Info</div>
         <div style="font-size:0.7rem;color:var(--text-secondary);line-height:1.6;font-family:monospace;">
           <div>Phase: ${gs.phase} | Turn: P${gs.currentTurn} | Dealer: P${gs.dealerIndex}</div>
@@ -2512,6 +2636,7 @@ const app = {
     this.broadcastGameState();
     this.renderGame();
     this.startTurnTimer();
+    this.triggerBotPlay();
   },
 
   debugSetScores() {
@@ -2587,6 +2712,7 @@ const app = {
     this.renderGame();
     this.updateDebugPanel();
     this.startTurnTimer();
+    this.triggerBotPlay();
   },
 
   debugRerunRound() {
@@ -2625,6 +2751,7 @@ const app = {
     this.startTurnTimer();
     this.toast('Snapshot loaded!');
     this.updateDebugPanel();
+    this.triggerBotPlay();
   },
 
   debugPauseTurn() {
@@ -2728,6 +2855,39 @@ const app = {
     this.toast('Force capture ' + (gs.forceCapture ? 'ON' : 'OFF'));
     this.broadcastGameState();
     this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugAddBot(playerId) {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) { this.toast('Host only'); return; }
+    if (playerId === 0) { this.toast("Can't replace the host"); return; }
+    if (this.isBotPlayer(playerId)) { this.toast('Already a bot'); return; }
+
+    const sel = document.getElementById('debug-bot-diff-' + playerId);
+    const diff = sel ? sel.value : 'medium';
+    this._botPlayers[playerId] = diff;
+
+    const botNames = { easy: 'Bot (Easy)', medium: 'Bot', hard: 'Bot (Hard)' };
+    gs.players[playerId].name = botNames[diff] || 'Bot';
+
+    if (this._roomRef) {
+      this._roomRef.child('players/' + playerId).set(gs.players[playerId].name);
+    }
+
+    this.toast('P' + playerId + ' replaced with bot');
+    this.broadcastGameState();
+    this.renderGame();
+    if (gs.currentTurn === playerId) this.triggerBotPlay();
+  },
+
+  debugRemoveBot(playerId) {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) { this.toast('Host only'); return; }
+    if (!this._botPlayers[playerId]) { this.toast('Not a bot'); return; }
+
+    delete this._botPlayers[playerId];
+    this.toast('P' + playerId + ' is no longer a bot (timer will auto-play)');
     this.updateDebugPanel();
   },
 
