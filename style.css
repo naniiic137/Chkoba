@@ -2058,6 +2058,130 @@ body::after {
   font-size: 0.82rem;
 }
 
+/* Debug restore pill (minimized state) */
+.debug-restore-pill {
+  position: fixed;
+  bottom: 1rem;
+  left: 1rem;
+  z-index: 2001;
+  background: linear-gradient(145deg, var(--gold), var(--gold-dim));
+  color: var(--bg-deepest);
+  border: none;
+  border-radius: 20px;
+  padding: 0.45rem 1rem;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 1px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 12px var(--gold-glow);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.debug-restore-pill:hover {
+  transform: scale(1.05);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), 0 0 20px var(--gold-glow);
+}
+
+.debug-restore-pill.hidden { display: none; }
+
+/* ============================= FREEZE BANNER ============================= */
+.freeze-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1500;
+  background: linear-gradient(135deg, rgba(100, 180, 255, 0.15), rgba(140, 200, 255, 0.1));
+  border-bottom: 2px solid rgba(100, 180, 255, 0.5);
+  color: #8ec8ff;
+  text-align: center;
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  backdrop-filter: blur(6px);
+  animation: freeze-pulse 2s ease-in-out infinite;
+}
+
+.freeze-icon-inline {
+  font-size: 0.7rem;
+  margin-right: 0.3rem;
+  letter-spacing: 1px;
+}
+
+@keyframes freeze-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+
+/* ============================= POSSESS BANNER ============================= */
+#possess-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  padding: 0.4rem 1rem;
+  background: linear-gradient(135deg, rgba(240, 192, 48, 0.12), rgba(240, 192, 48, 0.06));
+  border: 1px solid var(--gold-dim);
+  border-radius: var(--radius-md);
+  margin-bottom: 0.4rem;
+}
+
+.possess-label {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--gold);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+/* ============================= FROZEN TURN INDICATOR ============================= */
+.frozen-turn {
+  color: #8ec8ff;
+  font-weight: 800;
+  letter-spacing: 2px;
+  animation: freeze-pulse 2s ease-in-out infinite;
+}
+
+/* ============================= SPY MODE ============================= */
+.spy-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 0.3rem;
+}
+
+.spy-card {
+  display: inline-block;
+  background: rgba(240, 192, 48, 0.12);
+  border: 1px solid var(--gold-dim);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--gold-light);
+  font-family: 'Inter', monospace;
+}
+
+/* ============================= CONTROLLED OPPONENT ============================= */
+.opponent-card.controlled {
+  border-color: var(--gold);
+  box-shadow: 0 0 12px var(--gold-glow), inset 0 0 6px var(--gold-glow);
+}
+
+.ctrl-badge {
+  font-size: 0.55rem;
+  font-weight: 900;
+  color: var(--gold);
+  background: rgba(240, 192, 48, 0.15);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  letter-spacing: 1px;
+  vertical-align: middle;
+}
+
 /* ============================= RESPONSIVE ============================= */
 
 /* Tablet & small desktop */

@@ -232,7 +232,10 @@
   <div id="debug-panel" class="debug-panel hidden">
     <div class="debug-header">
       <span>🔧 DEBUG MODE</span>
-      <button class="btn-debug-close" onclick="app.toggleDebug()">✕</button>
+      <div style="display:flex;gap:0.3rem;">
+        <button class="btn-debug-close" onclick="app.minimizeDebug()" title="Minimize">─</button>
+        <button class="btn-debug-close" onclick="app.toggleDebug()" title="Close">✕</button>
+      </div>
     </div>
     <div class="debug-tabs">
       <button class="debug-tab active" data-tab="hands" onclick="app.switchDebugTab('hands')">Hands</button>

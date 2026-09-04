@@ -150,6 +150,9 @@ const app = {
   _roomStarted: false,
   _botPlayers: {},
   _playerSlots: {},
+  _gameFrozen: false,
+  _controllingPlayerId: null,
+  _spyMode: false,
 
   // ========== LOGGING ==========
   // Leveled logger. error/warn always print; info/debug print only in verbose mode
@@ -295,6 +298,10 @@ const app = {
           const move = snap.val();
           if (!move || move.playerId === undefined) return;
           snap.ref.remove().catch(err => this.log('warn', 'failed to clear move node:', err.message));
+          if (this._gameFrozen) {
+            this.log('debug', 'move rejected (frozen): player', move.playerId);
+            return;
+          }
           this.log('debug', 'move received from player', move.playerId, move);
           this.handlePlay(move);
         } catch (e) {
@@ -673,6 +680,7 @@ const app = {
     if (!this.isHost || !this.gameState) return;
     const gs = this.gameState;
     if (gs.phase !== 'playing' || gs.currentTurn < 0) return;
+    if (this._controllingPlayerId === gs.currentTurn) return;
     if (this.isBotPlayer(gs.currentTurn)) {
       this.botPlayForPlayer(gs.currentTurn);
     }
@@ -878,6 +886,7 @@ const app = {
   startTurnTimer() {
     this.stopTurnTimer();
     const gs = this.gameState;
+    if (this._gameFrozen || (gs && gs.frozen)) return;
     if (!gs || gs.phase !== 'playing' || !gs.turnTimerDuration || gs.turnTimerDuration <= 0) {
       this.updateTimerDisplay(1, gs ? gs.turnTimerDuration : 0);
       return;
@@ -1242,8 +1251,9 @@ const app = {
     }
     this.log('debug', 'broadcast state: turn', gs.currentTurn, 'phase', gs.phase, 'deck', gs.deck.length);
 
-    // Update host's local hand
-    this.myHand = gs.hands[0] || [];
+    // Update host's local hand (renderGame will override with controlled player if possessing)
+    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : 0;
+    this.myHand = gs.hands[activeId] || [];
     this.renderGame();
   },
 
@@ -1266,6 +1276,7 @@ const app = {
       nextDealerTurn: gs.nextDealerTurn !== undefined ? gs.nextDealerTurn : -1,
       diamondOwnership: this.getDiamondOwnership(),
       lastCapture: gs.lastCapture || null,
+      frozen: this._gameFrozen || false,
     };
   },
 
@@ -1311,6 +1322,7 @@ const app = {
       nextDealerTurn: data.nextDealerTurn !== -1 ? data.nextDealerTurn : undefined,
       diamondOwnership: data.diamondOwnership || {},
       lastCapture: data.lastCapture || null,
+      frozen: data.frozen || false,
     };
 
     this.selectedCardIndex = -1;
@@ -1347,7 +1359,9 @@ const app = {
   // ========== PLAYER ACTIONS ==========
   onCardClick(index) {
     const gs = this.gameState;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== this.myPlayerId || this.isSubmittingMove) return;
+    if (gs && gs.frozen && !this.isHost) { this.toast('Game is paused by host'); return; }
+    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== activeId || this.isSubmittingMove) return;
 
     this.playSound('click');
 
@@ -1374,7 +1388,9 @@ const app = {
 
   onCardDblClick(index) {
     const gs = this.gameState;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== this.myPlayerId || this.isSubmittingMove) return;
+    if (gs && gs.frozen && !this.isHost) return;
+    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== activeId || this.isSubmittingMove) return;
     this.selectedCardIndex = index;
     const card = this.myHand[index];
     if (!card) return;
@@ -1391,7 +1407,9 @@ const app = {
 
   onTableCardClick(index) {
     const gs = this.gameState;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== this.myPlayerId || this.selectedCardIndex === -1 || this.isSubmittingMove) return;
+    if (gs && gs.frozen && !this.isHost) return;
+    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== activeId || this.selectedCardIndex === -1 || this.isSubmittingMove) return;
     this.playSound('click');
     const cardId = gs.tableCards[index].id;
     const idx = this.selectedCaptureIndices.indexOf(cardId);
@@ -1461,8 +1479,9 @@ const app = {
 
     const executeSend = () => {
       if (this.isHost) {
-        this.log('debug', 'sending move (host, direct)', { cardId, captureCardIds });
-        this.handlePlay({ playerId: this.myPlayerId, cardId, captureCardIds });
+        const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+        this.log('debug', 'sending move (host, direct)', { playerId: activeId, cardId, captureCardIds });
+        this.handlePlay({ playerId: activeId, cardId, captureCardIds });
         if (this.isSubmittingMove) {
           this.isSubmittingMove = false;
           this.cancelSelection();
@@ -1510,7 +1529,10 @@ const app = {
     this.isSubmittingMove = false;
     const gs = this.gameState;
     if (!gs) return;
-    if (this.isHost && gs.hands) this.myHand = gs.hands[this.myPlayerId] || [];
+    if (this.isHost && gs.hands) {
+      const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+      this.myHand = gs.hands[activeId] || [];
+    }
 
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById('game-view').classList.add('active');
@@ -1521,6 +1543,33 @@ const app = {
     try { this.renderHand(); } catch (e) { this.log('error', 'renderHand:', e.message); }
     try { this.updateDebugPanel(); } catch (e) { /* silent */ }
     try { if (this.controlsOpen) this.renderControlsContent(); } catch (e) { /* silent */ }
+
+    // Freeze banner for non-host
+    let freezeBanner = document.getElementById('freeze-banner');
+    if (!freezeBanner) {
+      freezeBanner = document.createElement('div');
+      freezeBanner.id = 'freeze-banner';
+      freezeBanner.className = 'freeze-banner hidden';
+      freezeBanner.innerHTML = '<span class="freeze-icon-inline">&#10074;&#10074;</span> Game Paused by Host';
+      document.getElementById('game-view').prepend(freezeBanner);
+    }
+    freezeBanner.classList.toggle('hidden', !(gs.frozen && !this.isHost));
+
+    // Possess banner for host
+    let possessBanner = document.getElementById('possess-banner');
+    if (!possessBanner) {
+      possessBanner = document.createElement('div');
+      possessBanner.id = 'possess-banner';
+      possessBanner.className = 'hidden';
+      document.getElementById('hand-area').prepend(possessBanner);
+    }
+    if (this.isHost && this._controllingPlayerId !== null && gs.players) {
+      const cp = gs.players[this._controllingPlayerId];
+      possessBanner.innerHTML = `<span class="possess-label">CONTROLLING: P${this._controllingPlayerId} ${escapeHtml(cp ? cp.name : '?')} (T${cp ? cp.team + 1 : '?'})</span><button class="btn-debug" onclick="app.debugReleasePossess()" style="padding:0.2rem 0.6rem;font-size:0.68rem;">Release</button>`;
+      possessBanner.classList.remove('hidden');
+    } else {
+      possessBanner.classList.add('hidden');
+    }
 
     // Reset animateDeal after rendering
     this.animateDeal = false;
@@ -1534,9 +1583,12 @@ const app = {
     document.getElementById('deck-display').textContent = `${deckCount} left`;
 
     const turnEl = document.getElementById('turn-display');
-    if (gs.phase === 'playing' && gs.currentTurn >= 0) {
+    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+    if (this.isHost && this._gameFrozen) {
+      turnEl.innerHTML = '<span class="frozen-turn">FROZEN</span>';
+    } else if (gs.phase === 'playing' && gs.currentTurn >= 0) {
       const p = gs.players[gs.currentTurn];
-      if (gs.currentTurn === this.myPlayerId) {
+      if (gs.currentTurn === activeId) {
         turnEl.innerHTML = '<span class="your-turn">Your Turn!</span>';
       } else {
         turnEl.textContent = p ? p.name + "'s turn" : '--';
@@ -1597,15 +1649,25 @@ const app = {
 
     const avatarContent = isBot ? '<span class="bot-avatar-icon">BOT</span>' : escapeHtml(player.name.charAt(0).toUpperCase());
 
-    return `<div class="opponent-card ${isTurn ? 'active-turn' : ''} team${player.team + 1}">
+    const isControlled = this.isHost && this._controllingPlayerId === player.id;
+    let spyHtml = '';
+    if (this._spyMode && this.isHost && gs.hands && gs.hands[player.id] && gs.hands[player.id].length > 0) {
+      spyHtml = '<div class="spy-cards">' + gs.hands[player.id].map(c => {
+        const sym = SUIT_SYMBOLS[c.suit] || '';
+        return `<span class="spy-card">${c.display}${sym}</span>`;
+      }).join('') + '</div>';
+    }
+
+    return `<div class="opponent-card ${isTurn ? 'active-turn' : ''} ${isControlled ? 'controlled' : ''} team${player.team + 1}">
       <div class="opp-avatar">${avatarContent}</div>
       <div class="opp-details">
-        <div class="opp-name">${escapeHtml(player.name)}</div>
+        <div class="opp-name">${escapeHtml(player.name)}${isControlled ? ' <span class="ctrl-badge">CTRL</span>' : ''}</div>
         <div class="opp-stats">
           ${handDots}
           <span class="opp-captured">${capCount}</span>
           ${shkobbaCount > 0 ? `<span class="opp-shkobba">+${shkobbaCount}</span>` : ''}
         </div>
+        ${spyHtml}
       </div>
     </div>`;
   },
@@ -1637,13 +1699,15 @@ const app = {
     tableEl.innerHTML = gs.tableCards.map((card, i) => {
       const isSelected = this.selectedCaptureIndices.includes(card.id);
       let cls = 'card';
-      if (gs.currentTurn === this.myPlayerId && this.selectedCardIndex >= 0) cls += ' capture-target selectable';
+      const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+      if (gs.currentTurn === activeId && this.selectedCardIndex >= 0) cls += ' capture-target selectable';
       if (isSelected) cls += ' selected';
       const aria = escapeHtml(getCardAria(card));
       return `<div class="${cls}" role="button" tabindex="0" aria-label="${aria}" onclick="app.onTableCardClick(${i})" onkeydown="app.onCardKeydown(event,'table',${i})"><img src="${getCardImage(card)}" alt="${aria}" onerror="app.onCardImgError(this)"></div>`;
     }).join('');
 
-    const showHint = this.selectedCardIndex >= 0 && gs.currentTurn === this.myPlayerId;
+    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+    const showHint = this.selectedCardIndex >= 0 && gs.currentTurn === activeId;
     hintEl.classList.toggle('hidden', !showHint);
     if (showHint) {
       const card = this.myHand[this.selectedCardIndex];
@@ -1707,7 +1771,8 @@ const app = {
     const capturedEl = document.getElementById('my-captured');
 
     if (!gs) return;
-    const myPlayer = gs.players ? gs.players.find(p => p.id === this.myPlayerId) : null;
+    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
+    const myPlayer = gs.players ? gs.players.find(p => p.id === activeId) : null;
     labelEl.textContent = myPlayer ? `${escapeHtml(myPlayer.name)} (T${myPlayer.team + 1})` : 'Your Hand';
 
     const myTeam = myPlayer ? myPlayer.team : 0;
@@ -1724,7 +1789,7 @@ const app = {
       }
     }
 
-    const isMyTurn = gs.currentTurn === this.myPlayerId && gs.phase === 'playing';
+    const isMyTurn = gs.currentTurn === activeId && gs.phase === 'playing' && !(gs.frozen && !this.isHost);
 
     if (!this.myHand || this.myHand.length === 0) {
       handEl.innerHTML = gs.phase === 'playing' ? '<div style="color:var(--text-secondary);padding:1rem;">No cards left this round</div>' : '';
@@ -2237,19 +2302,47 @@ const app = {
 
   // ========== DEBUG MODE ==========
   debugEnabled: false,
+  _debugMinimized: false,
 
   toggleDebug() {
     if (!this.isHost) { this.toast('Debug is host-only'); return; }
     this.debugEnabled = !this.debugEnabled;
+    this._debugMinimized = false;
     this.log('info', 'debug mode', this.debugEnabled ? 'ON (verbose logging enabled)' : 'OFF');
     const panel = document.getElementById('debug-panel');
     const checkbox = document.getElementById('debug-toggle');
-    if (panel) panel.classList.toggle('hidden', !this.debugEnabled);
+    const pill = document.getElementById('debug-restore-pill');
+    if (panel) { panel.classList.toggle('hidden', !this.debugEnabled); panel.classList.remove('minimized'); }
     if (checkbox) checkbox.checked = this.debugEnabled;
+    if (pill) pill.classList.add('hidden');
     if (this.debugEnabled && panel) {
       this.updateDebugPanel();
       this.makeDebugDraggable(panel);
     }
+  },
+
+  minimizeDebug() {
+    this._debugMinimized = true;
+    const panel = document.getElementById('debug-panel');
+    if (panel) panel.classList.add('hidden');
+    let pill = document.getElementById('debug-restore-pill');
+    if (!pill) {
+      pill = document.createElement('button');
+      pill.id = 'debug-restore-pill';
+      pill.className = 'debug-restore-pill';
+      pill.textContent = '🔧 Debug';
+      pill.onclick = () => this.restoreDebug();
+      document.body.appendChild(pill);
+    }
+    pill.classList.remove('hidden');
+  },
+
+  restoreDebug() {
+    this._debugMinimized = false;
+    const panel = document.getElementById('debug-panel');
+    const pill = document.getElementById('debug-restore-pill');
+    if (panel) { panel.classList.remove('hidden'); this.updateDebugPanel(); }
+    if (pill) pill.classList.add('hidden');
   },
 
   makeDebugDraggable(panel) {
@@ -2529,6 +2622,54 @@ const app = {
       </div>
 
       <div class="debug-section">
+        <div class="debug-section-title">Team Control</div>
+        <div class="debug-controls">
+          ${gs.players.map(p => {
+            const otherTeam = p.team === 0 ? 1 : 0;
+            return `<div class="debug-controls-row" style="align-items:center;">
+              <span style="font-size:0.72rem;color:var(--team${p.team + 1});">P${p.id} ${escapeHtml(p.name)} — T${p.team + 1}</span>
+              <button class="btn-debug" onclick="app.debugSwapTeam(${p.id})" style="margin-left:auto;font-size:0.68rem;">Move to T${otherTeam + 1}</button>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+
+      <div class="debug-section">
+        <div class="debug-section-title">Player Control</div>
+        <div class="debug-controls">
+          ${this._controllingPlayerId !== null
+            ? `<div class="debug-controls-row" style="align-items:center;">
+                <span style="font-size:0.72rem;color:var(--gold);">Controlling P${this._controllingPlayerId} ${escapeHtml(gs.players[this._controllingPlayerId]?.name || '?')}</span>
+                <button class="btn-debug danger" onclick="app.debugReleasePossess()" style="margin-left:auto;">Release</button>
+              </div>`
+            : gs.players.filter(p => p.id !== this.myPlayerId).map(p => {
+                return `<div class="debug-controls-row" style="align-items:center;">
+                  <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
+                  <button class="btn-debug" onclick="app.debugPossessPlayer(${p.id})" style="margin-left:auto;font-size:0.68rem;">Play As</button>
+                </div>`;
+              }).join('')
+          }
+        </div>
+      </div>
+
+      <div class="debug-section">
+        <div class="debug-section-title">Host Powers</div>
+        <div class="debug-controls">
+          <button class="btn-debug ${this._gameFrozen ? 'danger' : ''}" onclick="app.debugToggleFreeze()">
+            ${this._gameFrozen ? '▶ Unfreeze Game' : '❄ Freeze Game'}
+          </button>
+          <button class="btn-debug ${this._spyMode ? 'danger' : ''}" onclick="app.debugToggleSpy()">
+            ${this._spyMode ? '🔒 Hide Hands' : '👁 Spy Mode (See All Hands)'}
+          </button>
+          <div class="debug-controls-row">
+            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:70px;">Win Score:</label>
+            <input type="number" id="debug-win-score" class="debug-select" value="${gs.winScore}" min="1" style="width:60px;">
+            <button class="btn-debug" onclick="app.debugSetWinScore()">Set</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="debug-section">
         <div class="debug-section-title">State Info</div>
         <div style="font-size:0.7rem;color:var(--text-secondary);line-height:1.6;font-family:monospace;">
           <div>Phase: ${gs.phase} | Turn: P${gs.currentTurn} | Dealer: P${gs.dealerIndex}</div>
@@ -2536,6 +2677,7 @@ const app = {
           <div>Captured: T1=${capT1} T2=${capT2} | Last Cap: T${gs.lastCaptureTeam + 1}</div>
           <div>Shkobba: T1=${gs.shkobbaCount[0]} T2=${gs.shkobbaCount[1]} | Scores: ${gs.scores[0]}-${gs.scores[1]}</div>
           <div>Force: ${gs.forceCapture ? 'ON' : 'OFF'} | Timer: ${gs.turnTimerDuration || 'Off'}s | Win: ${gs.winScore}</div>
+          <div>Frozen: ${this._gameFrozen ? 'YES' : 'no'} | Ctrl: ${this._controllingPlayerId !== null ? 'P' + this._controllingPlayerId : 'none'} | Spy: ${this._spyMode ? 'ON' : 'off'}</div>
         </div>
       </div>
     `;
@@ -2896,8 +3038,86 @@ const app = {
     const modal = document.getElementById('score-modal');
     if (modal) modal.classList.add('hidden');
     this._stateHistory = [];
+    this._controllingPlayerId = null;
+    this._gameFrozen = false;
+    this._spyMode = false;
     this.startGame();
     this.toast('Game fully reset!');
+    this.updateDebugPanel();
+  },
+
+  debugSwapTeam(playerId) {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) { this.toast('Host only'); return; }
+    const p = gs.players[playerId];
+    if (!p) return;
+    const oldTeam = p.team;
+    p.team = oldTeam === 0 ? 1 : 0;
+    this.toast(`${p.name} moved from T${oldTeam + 1} to T${p.team + 1}`);
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugPossessPlayer(playerId) {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) { this.toast('Host only'); return; }
+    if (playerId === this.myPlayerId) { this.toast('Already your hand'); return; }
+    this._controllingPlayerId = playerId;
+    this.myHand = gs.hands[playerId] || [];
+    this.cancelSelection();
+    this.toast(`Now controlling P${playerId} ${gs.players[playerId]?.name || ''}`);
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugReleasePossess() {
+    if (!this.isHost) return;
+    const wasControlling = this._controllingPlayerId;
+    this._controllingPlayerId = null;
+    const gs = this.gameState;
+    if (gs && gs.hands) this.myHand = gs.hands[this.myPlayerId] || [];
+    this.cancelSelection();
+    this.toast('Released control');
+    this.renderGame();
+    this.updateDebugPanel();
+    if (wasControlling !== null && gs && this.isBotPlayer(gs.currentTurn)) {
+      this.triggerBotPlay();
+    }
+  },
+
+  debugToggleFreeze() {
+    if (!this.isHost) { this.toast('Host only'); return; }
+    this._gameFrozen = !this._gameFrozen;
+    if (this._gameFrozen) {
+      this.stopTurnTimer();
+    } else {
+      this.startTurnTimer();
+    }
+    this.toast(this._gameFrozen ? 'Game FROZEN — all players paused' : 'Game UNFROZEN — resuming');
+    this.broadcastGameState();
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugToggleSpy() {
+    if (!this.isHost) { this.toast('Host only'); return; }
+    this._spyMode = !this._spyMode;
+    this.toast(this._spyMode ? 'Spy Mode ON — seeing all hands' : 'Spy Mode OFF');
+    this.renderGame();
+    this.updateDebugPanel();
+  },
+
+  debugSetWinScore() {
+    const gs = this.gameState;
+    if (!gs || !this.isHost) { this.toast('Host only'); return; }
+    const val = parseInt(document.getElementById('debug-win-score')?.value || 21);
+    if (isNaN(val) || val < 1) { this.toast('Invalid score'); return; }
+    gs.winScore = val;
+    this.winScore = val;
+    this.toast(`Win score set to ${val}`);
+    this.broadcastGameState();
+    this.renderGame();
     this.updateDebugPanel();
   },
 };
