@@ -1,6 +1,6 @@
-# Chkoba / شكوبة
+# Chkobba / شكوبة
 
-A multiplayer browser implementation of **Chkoba** (شكوبة), the popular Tunisian card game. Built with Firebase Realtime Database for real-time multiplayer across any network. Deployable to any static host (Netlify, Vercel, GitHub Pages).
+A multiplayer browser implementation of **Chkobba** (شكوبة), the popular Tunisian card game. Built with Firebase Realtime Database for real-time multiplayer across any network. Deployable to any static host (Netlify, Vercel, GitHub Pages).
 
 ## Quick Start
 
@@ -37,33 +37,51 @@ A multiplayer browser implementation of **Chkoba** (شكوبة), the popular Tun
 - **Play:** On your turn, play a card from your hand. You can either **place** it on the table or **capture** table cards whose values sum to your played card's value.
   - Aces = 1, 2-7 = face value, Queen = 8, Jack = 9, King = 10.
 - **Force Capture:** When enabled, you must capture if any combination of table cards matches your played card's value.
-- **Shkobba:** If you clear all cards from the table, your team scores +1 point (the dealer cannot score Shkobba on the last card of a round).
+- **Chkobba:** If you clear all cards from the table, your team scores +1 point (the dealer cannot score a Chkobba on the last card of a round).
 - **Round End:** When all hands are empty and the deck runs out, remaining table cards go to the last team that captured.
 - **Scoring per round:**
   - Most captured cards: **+1 point**
   - Most diamonds captured: **+1 point**
-  - 7 of diamonds (tiebreak: highest diamond in descending order): **+1 point**
-  - Each Shkobba: **+1 point**
+  - 7 of diamonds (the *haya*): **+1 point**
+  - Most sevens (tie: most sixes; tie again: no point): **+1 point**
+  - Each Chkobba: **+1 point**
 - **Instant Win:** Capture all 10 diamonds in a single round to win immediately.
-- **Win Condition:** First team to reach 11 (short game) or 21 (long game) points wins.
+- **Win Condition:** First team to reach the chosen score (5, 11, 21 or 31) wins.
+- **Capture assist (off by default):** when the host turns it on, cards that can take something are outlined, the matching table cards are highlighted, and a single possible take is picked for you. Off, you pick every card yourself and the Capture button only lights up when your picks add up.
 
 ### Tips
 
 - Table cards **carry over** between rounds — they are not cleared until the deck is empty.
 - When placing a card, you can double-click it to auto-place (if no capture is required).
-- Use the **Debug Mode** (toggle in main menu or press backtick `` ` ``) to see all players' hands, inspect the deck, and manipulate the game for testing.
+- Long-press, right-click or press `i` on a face-up card to open its info panel (value, what it scores, what it takes right now).
+- The host's **Debug Mode** (`debug()` in the console or `?debug=1`) shows all hands, the deck, and lets you manipulate the game for testing.
+
+### Look and settings
+
+- **Graphics** (theme Felt / Balatro / Noir, card style Photo / Flat / Pixel, suit set French / Coins) are chosen by the host and apply to everyone in the room. The Options screen sets the defaults for the next room; the in-game menu changes them live.
+- **Motion** (screen shake, animations), **labels** (Latin / Arabic + Latin / English) and **sound** are personal and stay in your browser.
 
 ### Run Locally
 
-Just open `index.html` in your browser. No build tools, no server, no dependencies.
+Serve the folder with any static server (for example `python -m http.server 8090`) and open it in a browser. Without a `firebase-config.js` only *Play vs bot* works. A local `firebase-config.js` with an `emulator: { host, port }` entry points the app at the Realtime Database emulator.
 
 ## Architecture
 
 ```
-chkoba/
-├── index.html          # Single-page app: lobby, game board, modals
-├── style.css           # All styling (responsive, card game layout)
-├── game.js             # Game logic + Firebase real-time networking
+chkobba/
+├── index.html          # Single-page app: menu, options, join, waiting room, game, overlays
+├── css/
+│   ├── tokens.css      # The token contract and the three themes (html[data-theme])
+│   ├── game.css        # Layout, frame + pill grammar, cards, text-fill, fx, overlays
+│   └── debug.css       # Host debug panel and banners
+├── js/
+│   ├── i18n.js         # Labels (Latin / Arabic / English) and rule copy
+│   ├── shader.js       # WebGL swirl background (themes that use one)
+│   ├── fire.js         # Pixel fire for the chkobba slam and the tally
+│   ├── juice.js        # Motion: tags, slam, flights, count-ups, shake, text-fill, tones
+│   ├── cards.js        # Card renderer: photo / flat / pixel, French or coin suits
+│   └── look.js         # Room look (host-owned) and personal comfort settings
+├── game.js             # Rules, host authority, Firebase networking, render queue + choreography
 ├── firebase-config.js  # Your Firebase project configuration
 ├── images/             # 40 PNG card images
 │   ├── ace_of_hearts.png

@@ -1,0 +1,378 @@
+@import url('https://fonts.googleapis.com/css2?family=Marcellus+SC&display=swap');
+
+/* ============================================================================
+   THEME - Noir Deco  (Deadlock-dominant)
+   "Deadlock at a Tunisian midnight." Near-black green-black felt, one dominant
+   coin-gold accent, paper-ivory stock, engraved card plates, heavy vignette +
+   grain, a warm key-light from above. Restraint is the brief: depth comes from
+   material (shadow / bevel / grain / vignette / glow), not from clutter.
+
+   Loaded by the page already: Cinzel (incised display), Oswald (condensed num),
+   Alegreya Sans (body), Aref Ruqaa (Arabic wordmark). The one @import above adds
+   Marcellus SC, a quieter incised classical face used for the court letters
+   (J/Q/K), where its taller capitals read as struck metal.
+
+   Themer owns this file only. Every rule is scoped to [data-theme="noir"] so it
+   cannot leak into the other themes. Tokens are the primary mechanism; the
+   decorative rules below paint the FX layers the contract exposes.
+   ========================================================================== */
+
+[data-theme="noir"] {
+  /* type - Cinzel stays the incised workhorse; Marcellus SC is the chrome face */
+  --font-display: 'Cinzel', 'Marcellus SC', Georgia, serif;
+  --font-num:     'Oswald', 'Cinzel', sans-serif;
+  --font-body:    'Alegreya Sans', system-ui, sans-serif;
+  --font-arabic:  'Aref Ruqaa', serif;
+
+  /* stage - green-black baize, nearly black at the rim so the vignette bites */
+  --bg:    #0A0E10;
+  --bg-2:  #0E1417;
+  --felt:  radial-gradient(135% 125% at 50% 22%,
+             #1B2622 0%, #131C1D 42%, #0C1314 72%, #070B0C 100%);
+  --felt-edge: rgba(0,0,0,.74);
+
+  /* text - warm aged ivory, three tiers of presence */
+  --text:     #ECDFBE;
+  --text-dim: rgba(236,223,190,.58);
+  --text-mut: rgba(236,223,190,.32);
+
+  /* accents - coin-gold dominant. Clay + a cold steel-indigo as the cool tone.
+     Kept clearly off flag-red so --haya stays the only red on the table. */
+  --gold:    #C9A24B;
+  --gold-lo: #7A5F26;
+  --gold-hi: #EFD89B;
+  --accent:   #2C6884;   /* Sidi Bou Saïd indigo, desaturated for night */
+  --accent-2: #B0592A;   /* Kairouan/Nabeul clay - warm, orange-side, not red */
+
+  /* cards - ivory stock, a hair warmer than base; crisp ink for legibility */
+  --card-face:  linear-gradient(168deg, #F5EDD7 0%, #ECDFC1 58%, #E0CFA8 100%);
+  --card-edge:  rgba(34,24,8,.42);
+  --card-red:   #A8362A;   /* deep lacquer red - reads on ivory, not flag-red */
+  --card-ink:   #1C2326;   /* near-black charcoal ink */
+  --card-back:  #0E1316;   /* base; the deco pattern is painted in .card-back */
+  --card-back-ink: var(--gold);
+
+  /* the engraved plate. Outer drop for lift, an inset top highlight (catching
+     the key-light), and a thin inset dark line along the bottom = bevel. This
+     single token carries most of the "expensive stock" read. */
+  --card-shadow:
+    0 10px 22px rgba(0,0,0,.55),
+    0 2px 6px rgba(0,0,0,.4),
+    0 1px 0 rgba(255,250,235,.55) inset,
+    0 -3px 7px rgba(40,28,10,.28) inset;
+
+  /* framing / glow - warmer, tighter gold than base */
+  --panel:      rgba(9,13,15,.93);
+  --panel-edge: rgba(201,162,75,.22);
+  --glow-gold:  0 0 16px rgba(201,162,75,.42);
+
+  /* finer, calmer grain than the base fractal - embossed-paper feel, not static */
+  --grain-url: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+/* Note: --juice-k is owned by the contract (JS slider + reduced-motion kill
+   switch on :root). The theme never overrides it. */
+
+/* ============================================================================
+   STAGE ATMOSPHERE - the living backdrop. Moody, never bleak: the dark is held
+   up by a single warm key-light from above plus a cold floor counter-glow.
+   ========================================================================== */
+
+/* warm key-light from above + a faint cold pool at the felt's foot.
+   Layered radial gradients only - cheap, no blur on an always-on layer. */
+[data-theme="noir"] .fx-glow {
+  background:
+    radial-gradient(58% 42% at 50% 0%,
+      rgba(239,216,155,.16), rgba(201,162,75,.05) 46%, transparent 72%),
+    radial-gradient(40% 30% at 50% 30%,
+      rgba(201,162,75,.10), transparent 70%),
+    radial-gradient(70% 40% at 50% 108%,
+      rgba(44,104,132,.07), transparent 70%);
+}
+
+/* deepen the vignette into the corners so the frame reads cinematic */
+[data-theme="noir"] .fx-vignette {
+  background:
+    radial-gradient(125% 95% at 50% 38%, transparent 48%, var(--felt-edge) 100%),
+    radial-gradient(90% 120% at 50% 50%, transparent 60%, rgba(0,0,0,.32) 100%);
+}
+
+/* grain - sits quietly over the felt as embossed tooth */
+[data-theme="noir"] .fx-grain { opacity: .045; }
+
+/* scanline whisper if the CRT toggle is on - kept faint for the grown-up theme */
+[data-theme="noir"] .fx-scanline {
+  background: repeating-linear-gradient(0deg,
+    rgba(0,0,0,0) 0 2px, rgba(0,0,0,.16) 2px 3px);
+}
+
+/* ============================================================================
+   ART-DECO FRAMING - stepped double-stroke corner brackets on the board, and a
+   thin gold deco rule under the header. Ornament lives in the frame, never in
+   the reading text.
+   ========================================================================== */
+[data-theme="noir"] #game-board {
+  position: relative;
+}
+
+/* corner brackets: a long outer stroke + a short inner stroke = stepped deco L */
+[data-theme="noir"] #game-board::before,
+[data-theme="noir"] #game-board::after {
+  content: ""; position: absolute; z-index: 1;
+  width: 88px; height: 88px; pointer-events: none;
+  /* outer L (gradient borders) + inner L (the box-shadow insets) */
+  box-shadow:
+    inset 0 2px 0 rgba(201,162,75,.34),
+    inset 2px 0 0 rgba(201,162,75,.34);
+}
+[data-theme="noir"] #game-board::before {
+  top: 14px; left: 14px;
+  border-top: 1px solid rgba(201,162,75,.5);
+  border-left: 1px solid rgba(201,162,75,.5);
+}
+[data-theme="noir"] #game-board::after {
+  bottom: 14px; right: 14px;
+  /* mirror the stepped L to the opposite corner */
+  box-shadow:
+    inset 0 -2px 0 rgba(201,162,75,.34),
+    inset -2px 0 0 rgba(201,162,75,.34);
+  border-bottom: 1px solid rgba(201,162,75,.5);
+  border-right: 1px solid rgba(201,162,75,.5);
+}
+
+/* a thin stepped deco rule under the header: hairline + a beaded gold seam */
+[data-theme="noir"] #game-header {
+  background: linear-gradient(180deg, rgba(0,0,0,.55), rgba(0,0,0,0));
+  border-bottom: 1px solid transparent;
+  border-image:
+    linear-gradient(90deg,
+      transparent, rgba(201,162,75,.05) 12%,
+      rgba(201,162,75,.5) 50%,
+      rgba(201,162,75,.05) 88%, transparent) 1;
+}
+/* the beaded under-seam: a row of faint gold dots echoing deco metalwork */
+[data-theme="noir"] #game-header::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 3px;
+  background:
+    radial-gradient(circle, rgba(201,162,75,.4) 0 1px, transparent 1.5px) 50% 50% / 14px 3px repeat-x;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 30%, #000 70%, transparent);
+          mask-image: linear-gradient(90deg, transparent, #000 30%, #000 70%, transparent);
+  opacity: .55; pointer-events: none;
+}
+
+/* ============================================================================
+   BRAND WORDMARK - شكوبة. Maghribi character (Aref Ruqaa), struck in lit gold
+   with a soft engraved drop so it reads as inlaid metal on near-black.
+   ========================================================================== */
+[data-theme="noir"] .brand-mark {
+  color: var(--gold-hi);
+  background: linear-gradient(180deg, var(--gold-hi) 0%, var(--gold) 55%, var(--gold-lo) 100%);
+  -webkit-background-clip: text;
+          background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow:
+    0 1px 0 rgba(0,0,0,.6),
+    0 0 18px rgba(201,162,75,.35);
+  letter-spacing: .01em;
+}
+
+/* ============================================================================
+   CARD FACES - court treatment + suit watermark. Plates already engraved by
+   --card-shadow; here we add an incised inner key-line and refine the J/Q/K.
+   ========================================================================== */
+
+/* a faint inner key-line on every plate = the embossed border of casino stock */
+[data-theme="noir"] .card__inner::after {
+  content: ""; position: absolute; inset: 3.5%;
+  border: 1px solid rgba(122,95,38,.22);
+  border-radius: calc(var(--card-radius) - 3px);
+  pointer-events: none;
+  /* a top sheen inside the keyline so the paper looks lit from above */
+  box-shadow: inset 0 1px 0 rgba(255,250,235,.5);
+}
+
+/* court letters use the chrome face (Marcellus SC) - taller, incised, classical */
+[data-theme="noir"] .card__court span {
+  font-family: 'Marcellus SC', var(--font-display);
+  font-weight: 400;
+  letter-spacing: .01em;
+  text-shadow: 0 1px 0 rgba(255,250,235,.5);
+}
+/* court frame: a double-stroke deco box, not a single flat line */
+[data-theme="noir"] .card__court {
+  border-color: color-mix(in srgb, var(--suit-color) 38%, transparent);
+  box-shadow:
+    inset 0 0 0 3px rgba(245,237,215,.6),
+    inset 0 0 0 4px color-mix(in srgb, var(--suit-color) 22%, transparent);
+}
+
+/* suit watermark behind courts - slightly more present, like a struck coin */
+[data-theme="noir"] .card__watermark { opacity: .085; }
+
+/* ============================================================================
+   CARD BACK - engraved deco guilloché: a stepped-chevron weave in gold-on-dark
+   with a fine cross-hatch and a beveled gold frame. Built from layered
+   repeating gradients (cheap, scales down to the 22px .mini without turning to
+   mud - the fine hatch drops out and the chevron stays).
+   ========================================================================== */
+[data-theme="noir"] .card-back {
+  background:
+    /* lit top edge of the plate */
+    linear-gradient(180deg, rgba(239,216,155,.10), transparent 30%),
+    /* primary chevron weave (deco zig-zag), gold strokes on near-black */
+    repeating-linear-gradient(45deg,
+      rgba(201,162,75,.16) 0 2px, transparent 2px 7px),
+    repeating-linear-gradient(-45deg,
+      rgba(201,162,75,.16) 0 2px, transparent 2px 7px),
+    /* fine cross-hatch under the chevron for guilloché texture */
+    repeating-linear-gradient(90deg,
+      rgba(201,162,75,.05) 0 1px, transparent 1px 4px),
+    /* the dark stock */
+    radial-gradient(120% 120% at 50% 35%, #141B1E 0%, #0B1012 70%, #070B0C 100%);
+}
+
+/* the inset deco frame - a stepped double border in gold, embossed */
+[data-theme="noir"] .card-back::after {
+  inset: 9%;
+  border: 1px solid rgba(201,162,75,.5);
+  border-radius: 5px;
+  box-shadow:
+    inset 0 0 0 2px rgba(11,16,18,.9),
+    inset 0 0 0 3px rgba(201,162,75,.28),
+    0 1px 0 rgba(255,250,235,.18);
+  /* a small gold center lozenge - the casino-stock pip */
+  background:
+    radial-gradient(circle at 50% 50%,
+      rgba(201,162,75,.22) 0 8%, transparent 9%) no-repeat 50% 50% / 100% 100%;
+}
+
+/* mini back (captured piles): keep the chevron, drop the fine hatch to avoid mud */
+[data-theme="noir"] .card-back.mini {
+  background:
+    repeating-linear-gradient(45deg,
+      rgba(201,162,75,.2) 0 1px, transparent 1px 4px),
+    #0C1113;
+}
+[data-theme="noir"] .card-back.mini::after {
+  inset: 2px; border-radius: 2px;
+  border: 1px solid rgba(201,162,75,.45);
+  box-shadow: none;
+}
+
+/* the table deck pile sits on the same stock; give it a quiet lit edge */
+[data-theme="noir"] .deck-pile .card-back {
+  box-shadow: var(--card-shadow), 0 0 0 1px rgba(201,162,75,.12);
+}
+
+/* ============================================================================
+   HUD / CHROME POLISH - scoped, subtle. Make the controls feel milled.
+   ========================================================================== */
+
+/* score badges - recessed brass plates with a lit top bevel */
+[data-theme="noir"] .score-badge {
+  background:
+    linear-gradient(180deg, rgba(201,162,75,.06), rgba(0,0,0,.34));
+  border: 1px solid rgba(201,162,75,.26);
+  box-shadow:
+    0 1px 0 rgba(255,250,235,.06) inset,
+    0 2px 6px rgba(0,0,0,.4);
+}
+[data-theme="noir"] .score-num {
+  color: var(--gold-hi);
+  text-shadow: 0 0 12px rgba(201,162,75,.28);
+}
+[data-theme="noir"] .score-badge.team2 .score-num {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text));
+  text-shadow: 0 0 10px rgba(44,104,132,.3);
+}
+
+/* room badge + game info - Marcellus SC tracking, quiet milled chip */
+[data-theme="noir"] .room-badge {
+  font-family: var(--font-num);
+  color: var(--text-dim);
+  background: linear-gradient(180deg, rgba(201,162,75,.05), rgba(0,0,0,.2));
+  border: 1px solid rgba(201,162,75,.24);
+  box-shadow: inset 0 1px 0 rgba(255,250,235,.05);
+}
+[data-theme="noir"] .game-info { letter-spacing: .08em; }
+
+/* action button - a brass key with a lit top edge and engraved settle */
+[data-theme="noir"] .btn-action {
+  color: var(--gold-hi);
+  border: 1px solid rgba(201,162,75,.4);
+  background: linear-gradient(180deg, rgba(201,162,75,.16), rgba(201,162,75,.03));
+  box-shadow:
+    inset 0 1px 0 rgba(255,250,235,.12),
+    0 2px 7px rgba(0,0,0,.4);
+}
+[data-theme="noir"] .btn-action:hover {
+  background: linear-gradient(180deg, rgba(201,162,75,.26), rgba(201,162,75,.08));
+  box-shadow:
+    inset 0 1px 0 rgba(255,250,235,.18),
+    var(--glow-gold);
+}
+
+/* opponent chip - recessed felt panel; active turn lit in gold */
+[data-theme="noir"] .opponent-info {
+  background: linear-gradient(180deg, rgba(0,0,0,.18), rgba(0,0,0,.42));
+  border: 1px solid rgba(201,162,75,.1);
+  box-shadow: inset 0 1px 0 rgba(255,250,235,.04);
+}
+[data-theme="noir"] .opponent-info .name {
+  font-family: var(--font-display);
+  letter-spacing: .05em;
+  color: var(--text);
+}
+
+/* player label - incised, widely tracked, faint gold */
+[data-theme="noir"] .player-label {
+  color: var(--text-mut);
+  letter-spacing: .26em;
+}
+
+/* table message - the dealer's quiet voice */
+[data-theme="noir"] .table-message {
+  font-family: var(--font-display);
+  color: var(--text-dim);
+  letter-spacing: .1em;
+}
+
+/* ============================================================================
+   PRESTIGE - the sabʿa l-ḥayya. The contract already rings it in --haya and
+   shimmers it. Add a slow gold-edge ember (the only place we let it breathe),
+   amplitude gated by --juice-k so reduced-motion stills it completely.
+   ========================================================================== */
+[data-theme="noir"] .card.is-haya .card__inner {
+  box-shadow:
+    var(--card-shadow),
+    0 0 0 1.5px var(--haya),
+    0 0 14px rgba(200,16,46,.5),
+    0 0 20px rgba(201,162,75,.26);
+  animation: noirHayaEmber calc(5s / max(var(--juice-k), .15)) var(--ease-out) infinite;
+}
+/* The animated delta is multiplied by --juice-k, so at k=0 (reduced motion) the
+   0% and 50% frames collapse to identical values and the ember holds still.
+   Alpha is held constant across frames to keep the deltas purely in blur. */
+@keyframes noirHayaEmber {
+  0%, 100% {
+    box-shadow:
+      var(--card-shadow),
+      0 0 0 1.5px var(--haya),
+      0 0 14px rgba(200,16,46,.5),
+      0 0 20px rgba(201,162,75,.26);
+  }
+  50% {
+    box-shadow:
+      var(--card-shadow),
+      0 0 0 1.5px var(--haya),
+      0 0 calc(14px + 10px * var(--juice-k)) rgba(200,16,46,.5),
+      0 0 calc(20px + 12px * var(--juice-k)) rgba(201,162,75,.26);
+  }
+}
+
+/* win-state shkobba shout already uses --haya in the contract; give it weight */
+[data-theme="noir"] .shkobba-announce {
+  text-shadow:
+    0 2px 0 rgba(0,0,0,.5),
+    var(--glow-haya),
+    0 0 30px rgba(200,16,46,.4);
+}

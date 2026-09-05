@@ -1,234 +1,237 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="b" data-cards="photo" data-suitstyle="french" data-labels="latin">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Chkoba — Tunisian Card Game</title>
-  <meta name="description" content="Play Chkoba, the beloved Tunisian card game, online with friends. Features real-time multiplayer, beautiful design, and authentic rules.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Chkobba</title>
+  <meta name="description" content="Play Chkobba, the Tunisian card game, online with friends or against a bot.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🃏</text></svg>">
-  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;700&family=Lalezar&family=Rubik:wght@400;600;700;900&family=Cinzel:wght@700;900&family=Oswald:wght@500;700&family=Aref+Ruqaa:wght@700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/game.css">
+  <link rel="stylesheet" href="css/debug.css">
 </head>
 <body>
-  <div id="app">
-    <!-- ============ LOBBY ============ -->
-    <div id="lobby-view" class="view active">
-      <div class="lobby-container">
-        <h1 class="game-title">Chkoba</h1>
-        <p class="subtitle">Tunisian Card Game</p>
+  <canvas id="bg-shader" aria-hidden="true"></canvas>
+  <div id="bg-css" aria-hidden="true"></div>
+  <div id="felt" aria-hidden="true"></div>
 
-        <div id="config-error" class="config-error hidden" role="alert">
-          Connection unavailable — Firebase is not configured. The game cannot start.
-        </div>
-
-        <input type="text" id="player-name" class="input" placeholder="Your Name" aria-label="Your name" maxlength="20">
-
-        <div class="settings-row">
-          <div class="select-group">
-            <label for="player-count">Players</label>
-            <select id="player-count" class="select">
-              <option value="2" selected>2</option>
-              <option value="4">4</option>
-            </select>
-          </div>
-          <div class="select-group">
-            <label for="win-score">Win</label>
-            <select id="win-score" class="select">
-              <option value="5">5</option>
-              <option value="11">11</option>
-              <option value="21" selected>21</option>
-              <option value="31">31</option>
-            </select>
-          </div>
-          <div class="select-group">
-            <label for="turn-timer">Timer</label>
-            <select id="turn-timer" class="select">
-              <option value="0">Off</option>
-              <option value="10">10s</option>
-              <option value="15">15s</option>
-              <option value="30" selected>30s</option>
-              <option value="45">45s</option>
-              <option value="60">60s</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="settings-row">
-          <div class="select-group">
-            <label for="bot-difficulty">Bot</label>
-            <select id="bot-difficulty" class="select">
-              <option value="easy">Easy</option>
-              <option value="medium" selected>Medium</option>
-              <option value="hard">Hard</option>
-            </select>
-          </div>
-          <div class="select-group">
-            <label for="game-speed">Speed</label>
-            <select id="game-speed" class="select">
-              <option value="slow">Slow</option>
-              <option value="normal" selected>Normal</option>
-              <option value="fast">Fast</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="toggle-group">
-          <label class="toggle-label">
-            <input type="checkbox" id="force-capture" checked>
-            <span>Force capture when possible</span>
-          </label>
-        </div>
-
-        <input type="checkbox" id="debug-toggle" style="display:none" onchange="app.toggleDebug()">
-
-        <button id="create-game-btn" class="btn btn-primary btn-big" onclick="app.createGame()">Create Game</button>
-        <button class="btn btn-secondary btn-big" onclick="app.playVsBot()" style="margin-top:0.6rem;">Play vs Bot</button>
+  <main id="app">
+    <!-- ================= MAIN MENU ================= -->
+    <section id="screen-menu" class="screen active" aria-label="Main menu">
+      <div class="hero-cards" id="hero-cards" aria-hidden="true"></div>
+      <div class="wordmark">
+        <span class="ar">شكوبة</span>
+        <span class="la">Chkobba</span>
+        <span class="tag">Tunisian card game</span>
       </div>
-    </div>
-
-    <!-- ============ JOIN ============ -->
-    <div id="join-view" class="view">
-      <div class="lobby-container">
-        <h1 class="game-title">Chkoba</h1>
-        <p class="subtitle">You've been invited to join!</p>
-
-        <div class="join-room-badge">Room: <strong id="join-room-code"></strong></div>
-
-        <input type="text" id="join-name" class="input" placeholder="Your Name" aria-label="Your name" maxlength="20">
-
-        <button id="join-game-btn" class="btn btn-primary btn-big" onclick="app.joinGame()">Join Game</button>
-        <button class="btn btn-text" onclick="app.showLobby()" style="margin-top:0.75rem;">Back</button>
-      </div>
-    </div>
-
-    <!-- ============ WAITING ROOM (HOST) ============ -->
-    <div id="waiting-view" class="view">
-      <div class="waiting-container">
-        <h2>Waiting Room</h2>
-        <div class="room-info">
-          <p style="margin-bottom:0.3rem;">Share this link with players:</p>
-          <div class="room-code-box">
-            <span id="room-link-display" class="room-link-text"></span>
-          </div>
-          <button class="btn btn-small btn-secondary" onclick="app.copyRoomLink()" style="margin-top:0.5rem;">📋 Copy Link</button>
+      <div id="config-error" class="config-error" hidden role="alert">Online play is unavailable: the server connection is not configured. Play vs bot still works.</div>
+      <nav class="menu-stack">
+        <input type="text" id="menu-name" class="input" placeholder="Your name" aria-label="Your name" maxlength="20" autocomplete="nickname">
+        <button class="pill big gold" id="m-bot">Play vs bot</button>
+        <button class="pill big chip" id="m-create">Create game</button>
+        <button class="pill big green" id="m-join">Join game</button>
+        <div style="display:flex;gap:10px">
+          <button class="pill ghost" id="m-rules" style="flex:1">Rules</button>
+          <button class="pill ghost" id="m-options" style="flex:1">Options</button>
         </div>
-        <div id="waiting-players" class="player-list"></div>
-        <button id="start-game-btn" class="btn btn-primary hidden" onclick="app.startGame()">Start Game</button>
-        <button class="btn btn-text" onclick="app.leaveRoom()">Leave</button>
-      </div>
-    </div>
+      </nav>
+      <div class="menu-foot">Chkobba · شكوبة</div>
+    </section>
 
-    <!-- ============ CONNECTED (PLAYER) ============ -->
-    <div id="connected-view" class="view">
-      <div class="waiting-container">
-        <h2>Connected!</h2>
-        <div class="room-info">
-          <p>Joined room: <strong id="connected-room"></strong></p>
-          <p style="color:var(--text-secondary);">Waiting for host to start the game...</p>
-          <div class="loading-spinner"></div>
+    <!-- ================= OPTIONS ================= -->
+    <section id="screen-options" class="screen screen--center" aria-label="Options">
+      <div class="frame">
+        <div class="frame__title">Options <span class="sub">room defaults and your settings</span></div>
+
+        <div class="setting-group">
+          <div class="gtitle">Room <small>set when you create a game or play a bot</small></div>
+          <div class="row"><span class="lbl">Players</span><div class="seg" id="o-players"><button data-v="2">2</button><button data-v="4">4 (teams)</button></div></div>
+          <div class="row"><span class="lbl">Win at</span><div class="seg" id="o-win"><button data-v="5">5</button><button data-v="11">11</button><button data-v="21">21</button><button data-v="31">31</button></div></div>
+          <div class="row"><span class="lbl">Turn timer</span><div class="seg wrap" id="o-timer"><button data-v="0">Off</button><button data-v="10">10s</button><button data-v="15">15s</button><button data-v="30">30s</button><button data-v="45">45s</button><button data-v="60">60s</button></div></div>
+          <div class="row"><span class="lbl">Bot</span><div class="seg" id="o-bot"><button data-v="easy">Easy</button><button data-v="medium">Medium</button><button data-v="hard">Hard</button></div></div>
+          <div class="row"><span class="lbl">Speed</span><div class="seg" id="o-speed"><button data-v="slow">Slow</button><button data-v="normal">Normal</button><button data-v="fast">Fast</button></div></div>
+          <div class="row"><span class="lbl">Force capture</span><div class="seg" id="o-force"><button data-v="true">On</button><button data-v="false">Off</button></div></div>
+          <div class="row"><span class="lbl">Capture assist</span><div class="seg" id="o-assist"><button data-v="false">Off</button><button data-v="true">On</button></div></div>
         </div>
-        <div id="connected-players" class="player-list"></div>
-        <button class="btn btn-text" onclick="app.leaveRoom()">Leave</button>
-      </div>
-    </div>
 
-    <!-- ============ GAME VIEW ============ -->
-    <div id="game-view" class="view">
-      <div id="game-header">
-        <div class="header-scores">
-          <div class="score-pill t1" id="score-t1">
-            <span class="score-label">T1</span>
-            <span class="score-value">0</span>
+        <div class="setting-group">
+          <div class="gtitle">Graphics <small>the host's choice applies to the whole room</small></div>
+          <div class="row"><span class="lbl">Theme</span><div class="seg" id="o-theme"><button data-v="b">Felt</button><button data-v="a">Balatro</button><button data-v="c">Noir</button></div></div>
+          <div class="row"><span class="lbl">Cards</span><div class="seg" id="o-cards"><button data-v="photo">Photo</button><button data-v="svg">Flat</button><button data-v="pixel">Pixel</button></div></div>
+          <div class="row"><span class="lbl">Suits</span><div class="seg" id="o-suits"><button data-v="french">French</button><button data-v="coin">Coins</button></div></div>
+        </div>
+
+        <div class="setting-group">
+          <div class="gtitle">Motion <small>yours only</small></div>
+          <div class="row"><span class="lbl">Screen shake</span><div class="seg" id="o-shake"><button data-v="true">On</button><button data-v="false">Off</button></div></div>
+          <div class="row"><span class="lbl">Animations</span><div class="seg" id="o-anim"><button data-v="true">On</button><button data-v="false">Off</button></div></div>
+        </div>
+
+        <div class="setting-group">
+          <div class="gtitle">Labels and sound <small>yours only</small></div>
+          <div class="row"><span class="lbl">Labels</span><div class="seg chipset" id="o-labels"><button data-v="latin">Latin</button><button data-v="arabic">عربي + Latin</button><button data-v="english">English</button></div></div>
+          <div class="row"><span class="lbl">Sound</span><div class="seg" id="o-sound"><button data-v="true">On</button><button data-v="false">Off</button></div></div>
+        </div>
+
+        <div class="actions"><button class="pill orange" data-back="screen-menu">Back</button></div>
+      </div>
+    </section>
+
+    <!-- ================= JOIN ================= -->
+    <section id="screen-join" class="screen screen--center" aria-label="Join a game">
+      <div class="frame" style="width:min(100%,460px)">
+        <div class="frame__title">Join game</div>
+        <div class="stack">
+          <input class="input" id="j-code" placeholder="Room code" maxlength="8" autocapitalize="characters" autocomplete="off" aria-label="Room code">
+          <input class="input" id="j-name" placeholder="Your name" maxlength="20" autocomplete="nickname" aria-label="Your name">
+        </div>
+        <div class="actions"><button class="pill orange" id="j-back">Back</button><button class="pill green" id="j-go">Join</button></div>
+      </div>
+    </section>
+
+    <!-- ================= WAITING ROOM (host and guests) ================= -->
+    <section id="screen-waiting" class="screen screen--center" aria-label="Waiting room">
+      <div class="frame">
+        <div class="frame__title">Waiting room <span class="sub" id="w-sub">share the code or the link</span></div>
+        <div class="code" id="w-code"></div>
+        <div class="plate" style="margin:14px 0;display:flex;justify-content:space-between;align-items:center;gap:10px"><span class="num" id="w-link" style="font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span><button class="pill sm chip" id="w-copy">Copy</button></div>
+        <div class="slots" id="w-slots"></div>
+        <div class="waiting-note" id="w-note"></div>
+        <div class="actions"><button class="pill orange" id="w-leave">Leave</button><button class="pill gold" id="w-start" hidden>Start</button></div>
+      </div>
+    </section>
+
+    <!-- ================= GAME ================= -->
+    <section id="screen-game" class="screen" aria-label="Game">
+      <div id="game-view" data-hud="top">
+        <aside id="hud">
+          <div class="hud-wordmark" aria-hidden="true">شكوبة</div>
+          <div class="hud-scores">
+            <div class="hud-team t1"><span class="lbl" id="hud-t1-name">Team 1</span><span class="val num" id="hud-t1">0</span><span class="shk" id="hud-t1-shk"></span></div>
+            <div class="hud-team t2"><span class="lbl" id="hud-t2-name">Team 2</span><span class="val num" id="hud-t2">0</span><span class="shk" id="hud-t2-shk"></span></div>
           </div>
-          <div class="header-game-status">
-            <div class="status-turn" id="turn-display">Your Turn!</div>
-            <div class="status-info">
-              <span id="round-display">R1/6</span>
-              <span class="status-dot"></span>
-              <span id="deck-display">24 left</span>
+          <div class="hud-box"><span class="lbl" id="lbl-round">Round</span><span class="val" id="hud-round">1/6</span></div>
+          <div class="hud-box"><span class="lbl" id="lbl-deck">Deck</span><span class="val" id="hud-deck">30</span></div>
+          <div class="hud-turn"><span class="fill lg" id="turn-fill"></span></div>
+          <span class="hud-spacer"></span>
+          <button class="hud-gear" id="hud-gear" aria-label="Game menu">☰</button>
+        </aside>
+        <div id="game-board">
+          <div id="opponents-top"></div>
+          <div id="play-area">
+            <div id="opponent-left"></div>
+            <div id="table-area">
+              <div id="table-deck" class="deck-pile"></div>
+              <div class="table-center">
+                <div id="table-cards" class="card-row" aria-label="Cards on the table"></div>
+                <div id="table-msg"></div>
+                <div id="fx-table" aria-hidden="true"></div>
+              </div>
+            </div>
+            <div id="opponent-right"></div>
+          </div>
+          <div id="hand-area">
+            <div id="player-label"></div>
+            <div id="my-captured"></div>
+            <div id="hand-cards" class="card-row" aria-label="Your hand"></div>
+            <div id="hand-actions">
+              <button class="pill green" id="btn-capture" hidden><span class="fill text">CAPTURE</span></button>
+              <button class="pill chip" id="btn-place" hidden><span class="fill text">PLACE</span></button>
+              <button class="pill ghost sm" id="btn-cancel" hidden>Cancel</button>
+            </div>
+            <div id="emote-bar" aria-label="Emotes">
+              <button class="pill ghost" data-emote="gg">GG</button>
+              <button class="pill ghost" data-emote="nice">Nice!</button>
+              <button class="pill ghost" data-emote="wow">Wow</button>
+              <button class="pill ghost" data-emote="oops">Oops</button>
+              <button class="pill ghost" data-emote="hurry">Hurry!</button>
             </div>
           </div>
-          <div class="score-pill t2" id="score-t2">
-            <span class="score-label">T2</span>
-            <span class="score-value">0</span>
-          </div>
-        </div>
-        <button class="header-btn" id="btn-controls" onclick="app.toggleControls()" title="Game Menu">⚙</button>
-      </div>
-
-      <div id="timer-bar-container">
-        <div id="timer-bar"></div>
-      </div>
-
-      <div id="game-board">
-        <div id="opponents-top" class="opponents-row"></div>
-
-        <div id="play-area">
-          <div id="opponent-left" class="opponent-side"></div>
-
-          <div id="table-area">
-            <div id="table-deck" class="deck-pile"></div>
-            <div class="table-center">
-              <div id="table-cards" class="card-row"></div>
-              <div id="table-msg" class="table-message"></div>
-              <div id="capture-hint" class="capture-hint hidden"></div>
-              <div id="shkobba-announce" class="shkobba-announce hidden">Shkobba! +1</div>
-            </div>
-          </div>
-
-          <div id="opponent-right" class="opponent-side"></div>
-        </div>
-
-        <div id="hand-area">
-          <div id="player-label" class="player-label"></div>
-          <div id="my-captured" class="my-captured hidden"></div>
-          <div id="hand-cards" class="card-row"></div>
-          <div id="hand-actions" class="hand-actions hidden">
-            <button id="btn-place" class="btn-action" onclick="app.placeCard()">Place</button>
-            <button id="btn-capture" class="btn-action btn-action-capture" onclick="app.confirmCapture()">Capture</button>
-            <button id="btn-cancel" class="btn-action btn-action-cancel" onclick="app.cancelSelection()">Cancel</button>
-          </div>
-          <div id="emote-bar" class="emote-bar">
-            <button class="emote-btn" onclick="app.sendEmote('gg')">GG</button>
-            <button class="emote-btn" onclick="app.sendEmote('nice')">Nice!</button>
-            <button class="emote-btn" onclick="app.sendEmote('wow')">Wow</button>
-            <button class="emote-btn" onclick="app.sendEmote('oops')">Oops</button>
-            <button class="emote-btn" onclick="app.sendEmote('hurry')">Hurry!</button>
-          </div>
         </div>
       </div>
-      <div id="emote-display" class="emote-display hidden"></div>
+      <div id="emote-display" hidden></div>
+    </section>
+  </main>
 
-      <!-- Scoreboard Modal (Round End / Game Over) -->
-      <div id="score-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="score-title">
-        <div class="modal-content">
-          <h2 id="score-title">Round Ended</h2>
-          <div id="score-details"></div>
-          <div class="modal-actions" id="score-modal-actions"></div>
+  <!-- ================= OVERLAYS ================= -->
+  <div class="overlay" id="ov-info" role="dialog" aria-label="Card info">
+    <div class="frame frame--wide">
+      <div class="rail">
+        <span></span>
+        <div class="info-grid">
+          <div id="info-card"></div>
+          <div class="plate"><div class="info-title display" id="info-title"></div><div id="info-body"></div></div>
+        </div>
+        <span></span>
+      </div>
+      <div class="actions"><button class="pill orange" data-close="ov-info">Back</button></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="ov-rules" role="dialog" aria-label="Rules">
+    <div class="frame frame--wide">
+      <div class="frame__title">Scoring <span class="sub">five ways to a point</span></div>
+      <div class="rail">
+        <button class="rail__btn" id="rules-prev" aria-label="Previous">‹</button>
+        <div class="info-grid">
+          <div id="rules-card"></div>
+          <div class="plate"><div class="info-title display" id="rules-title"></div><p id="rules-text"></p></div>
+        </div>
+        <button class="rail__btn" id="rules-next" aria-label="Next">›</button>
+      </div>
+      <div class="dots" id="rules-dots"></div>
+      <div class="actions"><button class="pill orange" data-close="ov-rules">Back</button></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="ov-ceremony" role="dialog" aria-label="Round score">
+    <div class="frame">
+      <div class="cer-head"><div class="frame__title" style="margin:0" id="cer-round">Round 1</div></div>
+      <div class="cer-teams"><div class="cer-team t1" id="cer-t1">Team 1</div><span></span><div class="cer-team t2" id="cer-t2">Team 2</div></div>
+      <div class="cer-lines" id="cer-lines"></div>
+      <div class="cer-total"><div class="cer-box t1 burnable" id="cer-tot1">0</div><div class="x" id="cer-x">score</div><div class="cer-box t2 burnable" id="cer-tot2">0</div></div>
+      <div class="cer-skip" id="cer-skip">tap to skip</div>
+    </div>
+  </div>
+
+  <div class="overlay" id="ov-match" role="dialog" aria-label="Match over">
+    <div class="confetti" id="confetti" aria-hidden="true"></div>
+    <div class="frame">
+      <div class="frame__title" style="justify-content:center;font-size:30px" id="match-title"></div>
+      <div class="match-sub" id="match-sub" hidden></div>
+      <div class="match-score" id="match-score"></div>
+      <div class="actions"><button class="pill ghost" id="match-menu">Menu</button><button class="pill gold" id="match-again">Rematch</button></div>
+    </div>
+  </div>
+
+  <div class="overlay side" id="ov-gamemenu" role="dialog" aria-label="Game menu">
+    <div class="frame">
+      <div class="frame__title">Menu <button class="pill sm ghost" data-close="ov-gamemenu">Close</button></div>
+      <div class="tabs"><button class="on" data-t="stats">Stats</button><button data-t="settings">Settings</button><button data-t="log">Log</button><button data-t="actions">Actions</button></div>
+      <div data-tab="stats" id="gm-stats"></div>
+      <div data-tab="settings" id="gm-settings" hidden></div>
+      <div data-tab="log" id="gm-log" hidden></div>
+      <div data-tab="actions" id="gm-actions" hidden>
+        <div class="stack">
+          <button class="pill chip" id="gm-copy">Copy room link</button>
+          <button class="pill ghost" id="gm-rules">Rules</button>
+          <button class="pill orange" id="gm-surrender">Surrender</button>
+          <button class="pill mult" id="gm-leave">Leave game</button>
         </div>
       </div>
     </div>
   </div>
 
-  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
 
-  <!-- ============ CONTROLS PANEL (Side Drawer) ============ -->
-  <div id="controls-panel">
-    <div class="controls-header">
-      <h3>⚙ Game Menu</h3>
-      <button class="controls-close" onclick="app.toggleControls()">✕</button>
-    </div>
-    <div class="controls-tabs">
-      <button class="controls-tab active" data-tab="stats" onclick="app.switchControlsTab('stats')">Stats</button>
-      <button class="controls-tab" data-tab="settings" onclick="app.switchControlsTab('settings')">Settings</button>
-      <button class="controls-tab" data-tab="log" onclick="app.switchControlsTab('log')">Log</button>
-      <button class="controls-tab" data-tab="actions" onclick="app.switchControlsTab('actions')">Actions</button>
-    </div>
-    <div class="controls-tab-content" id="controls-content">
-      <!-- Content filled by JS -->
-    </div>
-  </div>
+  <div class="stage-fx" aria-hidden="true"><div class="fx-grain"></div><div class="fx-scanline"></div></div>
 
-  <!-- ============ DEBUG PANEL ============ -->
+  <input type="checkbox" id="debug-toggle" style="display:none" onchange="app.toggleDebug()">
+
+  <!-- ============ DEBUG PANEL (host only) ============ -->
   <div id="debug-panel" class="debug-panel hidden">
     <div class="debug-header">
       <span>🔧 DEBUG MODE</span>
@@ -243,15 +246,19 @@
       <button class="debug-tab" data-tab="deck" onclick="app.switchDebugTab('deck')">Deck</button>
       <button class="debug-tab" data-tab="controls" onclick="app.switchDebugTab('controls')">Controls</button>
     </div>
-    <div class="debug-body" id="debug-body">
-      <!-- Content filled by JS -->
-    </div>
+    <div class="debug-body" id="debug-body"></div>
   </div>
 
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" crossorigin="anonymous"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js" integrity="sha384-g5H2aNdtgRBYOBLsuOAuHvUXWnw4bswmU+tYjmGc1G3JfKxl79uWwV4sQarJsLwu" crossorigin="anonymous"></script>
   <script src="firebase-config.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/shader.js"></script>
+  <script src="js/fire.js"></script>
+  <script src="js/juice.js"></script>
+  <script src="js/cards.js"></script>
+  <script src="js/look.js"></script>
   <script src="game.js"></script>
 </body>
 </html>
