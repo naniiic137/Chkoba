@@ -4,3 +4,6 @@ node_modules/
 Thumbs.db
 *.log
 firebase-config.js
+
+# local iteration space for the UI rework (menus, scenes, tweak panel). Never committed.
+demo/
