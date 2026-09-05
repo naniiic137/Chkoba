@@ -102,14 +102,25 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
+
 // ===================== APP =====================
+// Rules, networking and the host's authority are unchanged from the previous UI. What is
+// new: every screen is a .screen section, the board is painted through a render queue
+// that derives its choreography from (previous, current) public state, the look
+// (theme / cards / suits) is a room setting the host owns, and the round-end tally is
+// a ceremony instead of a table. Wire keys keep their old names (shkobbaCount,
+// shkobbaThisTurn) so a mid-deploy client and host still understand each other.
+const ROOM_OPTS_KEY = 'chkobba_room_opts';
+const NAME_KEY = 'chkobba_name';
+
 const app = {
   isHost: false,
   myPlayerId: -1,
   roomCode: '',
   roomLink: '',
-  playerCount: 4,
+  playerCount: 2,
   forceCapture: true,
+  captureAssist: false,
   winScore: 21,
   turnTimerDuration: 30,
   myName: '',
@@ -122,16 +133,14 @@ const app = {
   _toastTimer: null,
   _turnTimer: null,
   _turnTimerStart: 0,
-  _turnTimerRemaining: 0,
+  _turnKey: '',
   _timerRAF: null,
   moveLog: [],
-  controlsOpen: false,
-  controlsTab: 'stats',
+  menuOpen: false,
+  menuTab: 'stats',
   debugTab: 'hands',
-  soundsEnabled: true,
-  animationsEnabled: true,
   isSubmittingMove: false,
-  animateDeal: false,
+  _submitGuard: null,
   botDifficulty: 'medium',
   gameSpeed: 'normal',
   _emoteTimeout: null,
@@ -142,6 +151,7 @@ const app = {
   _dbError: false,
   _verbose: false,
   _audioCtx: null,
+  _audioUnlocked: false,
   _roomRef: null,
   _stateRef: null,
   _movesRef: null,
@@ -153,18 +163,31 @@ const app = {
   _gameFrozen: false,
   _controllingPlayerId: null,
   _spyMode: false,
+  _isBotGame: false,
+  // render pipeline
+  _shown: null,
+  _renderQueued: false,
+  _animating: false,
+  _idleResolvers: [],
+  _pendingDealTable: false,
+  _ceremonyKey: '',
+  _matchKey: '',
+  _ceremonySkip: false,
+  _ceremonyContinue: null,
+  rulesPage: 0,
+  // room defaults chosen on the Options screen (persisted)
+  opts: { players: 2, winScore: 21, timer: 30, bot: 'medium', speed: 'normal', forceCapture: true, captureAssist: false },
 
   // ========== LOGGING ==========
   // Leveled logger. error/warn always print; info/debug print only in verbose mode
-  // (debug panel open, ?debug=1, or localStorage chkoba_debug="true"). Keeps the console
-  // quiet for players while giving a full networking trace when diagnosing an issue.
+  // (debug panel open, ?debug=1, or localStorage chkoba_debug="true").
   log(level, ...args) {
     if ((level === 'info' || level === 'debug') && !this._verbose && !this.debugEnabled) return;
     const fn = level === 'error' ? console.error
       : level === 'warn' ? console.warn
       : level === 'debug' ? console.debug
       : console.log;
-    fn('[chkoba]', ...args);
+    fn('[chkobba]', ...args);
   },
 
   _installGlobalErrorHandlers() {
@@ -177,20 +200,25 @@ const app = {
     });
   },
 
-  // ========== ROOM MANAGEMENT ==========
+  // ========== BOOT ==========
   init() {
     const params = new URLSearchParams(window.location.search);
     this._verbose = params.get('debug') === '1' || localStorage.getItem('chkoba_debug') === 'true';
     this._installGlobalErrorHandlers();
     this.log('info', 'init: verbose logging', this._verbose ? 'ON' : 'OFF (add ?debug=1 to enable)');
 
-    this.soundsEnabled = localStorage.getItem('chkoba_sounds') !== 'false';
-    this.animationsEnabled = localStorage.getItem('chkoba_animations') !== 'false';
+    Look.init();
+    this._loadOpts();
+    Shader.init(document.getElementById('bg-shader'));
+    Shader.start();
+    Shader.setEnabled(Look.prefs.animations && Shader.wanted);
 
     try {
       firebase.initializeApp(firebaseConfig);
       this._db = firebase.database();
-      firebase.auth().signInAnonymously().catch((err) => {
+      // a local firebase-config.js may point at the Realtime Database emulator for testing
+      if (firebaseConfig.emulator) this._db.useEmulator(firebaseConfig.emulator.host, firebaseConfig.emulator.port);
+      else firebase.auth().signInAnonymously().catch((err) => {
         this.log('error', 'Anonymous auth failed:', err);
       });
       this.log('info', 'Firebase initialized');
@@ -200,81 +228,218 @@ const app = {
       this.showConfigError();
     }
 
+    this.bindScreens();
+    this.renderMenuCards();
+
     const code = params.get('room');
-    if (code) {
-      this.showJoinView(code.toUpperCase());
-    } else {
-      this.showLobby();
-    }
+    if (code) this.showJoin(code.toUpperCase());
+    else this.showMenu();
+
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        if (this.controlsOpen) this.toggleControls();
-        else if (this.debugEnabled) this.toggleDebug();
-      }
+      if (e.key !== 'Escape') return;
+      if (this.debugEnabled) { this.toggleDebug(); return; }
+      if (this.menuOpen) { this.toggleMenu(); return; }
+      const open = document.querySelector('.overlay.open');
+      if (open && open.id !== 'ov-ceremony' && open.id !== 'ov-match') { this.closeOverlay(open.id); return; }
+      if (this.gameState && this.gameState.phase === 'playing') this.cancelSelection();
     });
+    // audio needs a gesture: the first pointer anywhere unlocks both sound engines
+    document.addEventListener('pointerdown', () => { this._audioUnlocked = true; Juice.unlock(); }, { once: true });
     window.debug = () => { this.toggleDebug(); };
   },
 
-  showJoinView(roomCode) {
-    this.roomCode = roomCode;
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('join-view').classList.add('active');
-    document.getElementById('join-room-code').textContent = roomCode;
+  _loadOpts() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(ROOM_OPTS_KEY) || 'null');
+      if (saved) Object.assign(this.opts, saved);
+    } catch (e) { /* ignore a corrupt entry */ }
+    const name = localStorage.getItem(NAME_KEY) || '';
+    document.getElementById('menu-name').value = name;
+    document.getElementById('j-name').value = name;
+  },
+  _saveOpts() {
+    try { localStorage.setItem(ROOM_OPTS_KEY, JSON.stringify(this.opts)); } catch (e) { /* private mode */ }
+  },
+  _rememberName(name) { try { localStorage.setItem(NAME_KEY, name); } catch (e) { /* private mode */ } },
+
+  // ========== SCREENS ==========
+  showScreen(id) {
+    document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === id));
+    document.documentElement.dataset.screen = id.replace('screen-', '');
+  },
+  showMenu() { this.closeAllOverlays(); this.showScreen('screen-menu'); },
+  showOptions() { this.renderOptions(); this.showScreen('screen-options'); },
+  showJoin(code) {
+    this.roomCode = code || '';
+    document.getElementById('j-code').value = this.roomCode;
+    this.showScreen('screen-join');
+    document.getElementById(this.roomCode ? 'j-name' : 'j-code').focus();
+  },
+  showWaiting() { this.showScreen('screen-waiting'); this.renderWaiting(); },
+  openOverlay(id) { document.getElementById(id).classList.add('open'); },
+  closeOverlay(id) { document.getElementById(id).classList.remove('open'); },
+  closeAllOverlays() { document.querySelectorAll('.overlay.open').forEach((o) => o.classList.remove('open')); this.menuOpen = false; },
+
+  bindScreens() {
+    const $ = (id) => document.getElementById(id);
+    // menu
+    $('m-bot').addEventListener('click', () => this.playVsBot());
+    $('m-create').addEventListener('click', () => this.createGame());
+    $('m-join').addEventListener('click', () => this.showJoin(''));
+    $('m-rules').addEventListener('click', () => this.showRules());
+    $('m-options').addEventListener('click', () => this.showOptions());
+    document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', () => this.showScreen(b.dataset.back)));
+    // join
+    $('j-go').addEventListener('click', () => this.joinGame());
+    $('j-back').addEventListener('click', () => this.showMenu());
+    $('j-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.joinGame(); });
+    $('menu-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.playVsBot(); });
+    // waiting
+    $('w-copy').addEventListener('click', () => this.copyRoomLink());
+    $('w-leave').addEventListener('click', () => this.leaveRoom());
+    $('w-start').addEventListener('click', () => this.startGame());
+    $('w-slots').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-act]'); if (!b) return;
+      const slot = +b.dataset.slot;
+      if (b.dataset.act === 'addbot') this.addBotToWaiting(slot);
+      else if (b.dataset.act === 'removebot') this.removeBotFromWaiting(slot);
+      else if (b.dataset.act === 'swap') this.swapPlayers(slot);
+    });
+    // options: room defaults
+    this.bindSeg($('o-players'), () => this.opts.players, (v) => { this.opts.players = v; this._saveOpts(); });
+    this.bindSeg($('o-win'), () => this.opts.winScore, (v) => { this.opts.winScore = v; this._saveOpts(); });
+    this.bindSeg($('o-timer'), () => this.opts.timer, (v) => { this.opts.timer = v; this._saveOpts(); });
+    this.bindSeg($('o-bot'), () => this.opts.bot, (v) => { this.opts.bot = v; this._saveOpts(); });
+    this.bindSeg($('o-speed'), () => this.opts.speed, (v) => { this.opts.speed = v; this._saveOpts(); });
+    this.bindSeg($('o-force'), () => this.opts.forceCapture, (v) => { this.opts.forceCapture = v; this._saveOpts(); });
+    this.bindSeg($('o-assist'), () => this.opts.captureAssist, (v) => { this.opts.captureAssist = v; this._saveOpts(); });
+    // options: look (the host's default for the next room, applied right away so it can be seen)
+    this.bindSeg($('o-theme'), () => Look.get().theme, (v) => this.setLookLocal({ theme: v }));
+    this.bindSeg($('o-cards'), () => Look.get().cards, (v) => this.setLookLocal({ cards: v }));
+    this.bindSeg($('o-suits'), () => Look.get().suits, (v) => this.setLookLocal({ suits: v }));
+    // options: personal
+    this.bindSeg($('o-shake'), () => Look.prefs.shake, (v) => Look.setPref('shake', v));
+    this.bindSeg($('o-anim'), () => Look.prefs.animations, (v) => Look.setPref('animations', v));
+    this.bindSeg($('o-labels'), () => Look.prefs.labels, (v) => { Look.setPref('labels', v); this.renderMenuCards(); if (this.gameState) this.renderGame(); });
+    this.bindSeg($('o-sound'), () => Look.prefs.sound, (v) => { Look.setPref('sound', v); if (v) this.playSound('click'); });
+    // game hud + actions
+    $('hud-gear').addEventListener('click', () => this.toggleMenu());
+    $('btn-capture').addEventListener('click', () => this.confirmCapture());
+    $('btn-place').addEventListener('click', () => this.placeCard());
+    $('btn-cancel').addEventListener('click', () => this.cancelSelection());
+    $('emote-bar').addEventListener('click', (e) => { const b = e.target.closest('[data-emote]'); if (b) this.sendEmote(b.dataset.emote); });
+    // side menu
+    document.querySelectorAll('#ov-gamemenu .tabs button').forEach((b) => b.addEventListener('click', () => this.switchMenuTab(b.dataset.t)));
+    $('gm-settings').addEventListener('click', (e) => { const b = e.target.closest('button[data-set]'); if (b) this.onMenuSetting(b.dataset.set, b.dataset.v); });
+    $('gm-copy').addEventListener('click', () => this.copyRoomLink());
+    $('gm-rules').addEventListener('click', () => { this.toggleMenu(); this.showRules(); });
+    $('gm-surrender').addEventListener('click', () => this.surrenderGame());
+    $('gm-leave').addEventListener('click', () => { this.toggleMenu(); this.backToLobby(); });
+    // overlays
+    document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => { this.closeOverlay(b.dataset.close); if (b.dataset.close === 'ov-gamemenu') this.menuOpen = false; }));
+    document.querySelectorAll('.overlay').forEach((o) => o.addEventListener('pointerdown', (e) => {
+      if (e.target !== o) return;
+      if (o.id === 'ov-ceremony' || o.id === 'ov-match') return;
+      this.closeOverlay(o.id); if (o.id === 'ov-gamemenu') this.menuOpen = false;
+    }));
+    $('rules-prev').addEventListener('click', () => { this.rulesPage = (this.rulesPage + I18N.RULES.length - 1) % I18N.RULES.length; this.renderRules(); Juice.tick(1); });
+    $('rules-next').addEventListener('click', () => { this.rulesPage = (this.rulesPage + 1) % I18N.RULES.length; this.renderRules(); Juice.tick(2); });
+    $('match-again').addEventListener('click', () => this.rematch());
+    $('match-menu').addEventListener('click', () => this.backToLobby());
+    // ceremony: a tap skips the count, then continues (host) once the tally is complete
+    $('ov-ceremony').addEventListener('pointerdown', () => {
+      if (this._ceremonyContinue) { const c = this._ceremonyContinue; this._ceremonyContinue = null; c(); return; }
+      this._ceremonySkip = true;
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!$('ov-ceremony').classList.contains('open')) return;
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); $('ov-ceremony').dispatchEvent(new PointerEvent('pointerdown')); }
+    });
   },
 
-  showLobby() {
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('lobby-view').classList.add('active');
+  // A segmented control: buttons carry data-v; get() supplies the current value,
+  // set(v) receives it typed (booleans and numbers come back as such).
+  bindSeg(el, get, set) {
+    const sync = () => { const cur = String(get()); el.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === cur)); };
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b || el.getAttribute('aria-disabled') === 'true') return;
+      const raw = b.dataset.v;
+      const v = raw === 'true' ? true : raw === 'false' ? false : (raw !== '' && !isNaN(raw)) ? +raw : raw;
+      set(v); sync(); Juice.tick(0);
+    });
+    el._sync = sync;
+    sync();
+  },
+  renderOptions() { document.querySelectorAll('#screen-options .seg').forEach((el) => el._sync && el._sync()); },
+
+  // The Options screen changes the look immediately (so the change can be seen) and
+  // stores it as the default for the next room. In a running room only the host's
+  // in-game menu changes it, because it has to reach every player.
+  setLookLocal(partial) { Look.setLook(partial, true); this.renderMenuCards(); if (this.gameState) this.renderGame(); },
+
+  renderMenuCards() {
+    const box = document.getElementById('hero-cards'); box.innerHTML = '';
+    [{ id: 16, suit: 'diamonds', name: '7', display: '7', value: 7 }, { id: 30, suit: 'spades', name: 'ace', display: 'A', value: 1 }, { id: 26, suit: 'clubs', name: '7', display: '7', value: 7 }]
+      .forEach((c) => box.appendChild(Cards.build(c, { interactive: true, idle: true })));
   },
 
+  readName(inputId) {
+    const name = document.getElementById(inputId).value.trim();
+    if (!name) { this.toast('Enter your name first'); document.getElementById(inputId).focus(); return null; }
+    this._rememberName(name);
+    return name;
+  },
+
+  // ========== ROOM MANAGEMENT ==========
   createGame() {
-    if (!this._db) { this.showConfigError(); this.toast('Connection unavailable — check Firebase configuration'); return; }
-    const name = document.getElementById('player-name').value.trim();
-    if (!name) { this.toast('Please enter your name'); return; }
+    if (!this._db) { this.showConfigError(); this.toast('Online play is not available'); return; }
+    const name = this.readName('menu-name'); if (!name) return;
+    Juice.unlock();
     this.myName = name;
     this.isHost = true;
-    this.playerCount = parseInt(document.getElementById('player-count').value);
-    this.forceCapture = document.getElementById('force-capture').checked;
-    this.winScore = parseInt(document.getElementById('win-score').value);
-    this.turnTimerDuration = parseInt(document.getElementById('turn-timer').value);
-    this.gameSpeed = document.getElementById('game-speed').value;
+    this._isBotGame = false;
+    this.playerCount = +this.opts.players;
+    this.forceCapture = !!this.opts.forceCapture;
+    this.captureAssist = !!this.opts.captureAssist;
+    this.winScore = +this.opts.winScore;
+    this.turnTimerDuration = +this.opts.timer;
+    this.botDifficulty = this.opts.bot;
+    this.gameSpeed = this.opts.speed;
+    const look = Look.setLook(Look.savedLook(), false);
 
-    // Generate code and show waiting room IMMEDIATELY
     this.roomCode = genRoomCode();
     this.myPlayerId = 0;
     this.playerList = [this.myName];
     this.moveLog = [];
     this._botPlayers = {};
     this._playerSlots = { 0: this.myName };
+    this._roomStarted = false;
 
-    // Create room in Firebase
     this._roomRef = this._db.ref('rooms/' + this.roomCode);
     this._roomRef.set({
       host: this.myName,
       playerCount: this.playerCount,
       forceCapture: this.forceCapture,
+      captureAssist: this.captureAssist,
       winScore: this.winScore,
       turnTimerDuration: this.turnTimerDuration,
+      look,
       players: { 0: this.myName },
       started: false,
     }).then(() => {
       // NOTE: we deliberately do NOT arm onDisconnect().remove() on the room. onDisconnect
       // fires on any transient drop (mobile blip, tab backgrounding), which would delete a
-      // live game on a 2-second hiccup and — since the host's next update() recreates the
-      // room without a host child — corrupt it permanently. Robust handling needs presence
-      // + a reconnect grace period + host migration (tracked in docs/AUDIT.md item 3). A
-      // graceful host exit is still handled: releaseRoom() removes the room and clients see
-      // the host child vanish. An ungraceful host close leaves clients on stale state until
-      // they leave — a known limitation, not a regression.
+      // live game on a 2-second hiccup and, since the host's next update() recreates the
+      // room without a host child, corrupt it permanently. Robust handling needs presence
+      // + a reconnect grace period + host migration (tracked in docs/AUDIT.md item 3).
       const baseUrl = window.location.href.split('?')[0];
       const currentParams = new URLSearchParams(window.location.search);
       currentParams.delete('room');
       currentParams.set('room', this.roomCode);
       this.roomLink = baseUrl + '?' + currentParams.toString();
-      this.toast('Room ready!');
+      this.toast('Room ready');
       this.log('info', 'room created', this.roomCode, '(' + this.playerCount + 'p)');
 
-      // Listen for player joins
       const playersRef = this._roomRef.child('players');
       playersRef.on('value', (snap) => {
         const players = snap.val() || {};
@@ -290,8 +455,8 @@ const app = {
       });
       this._playerListeners.push(playersRef);
 
-      // Listen for moves. Wrap the callback so a malformed payload from a client can't
-      // throw and tear down the host's move listener (which would freeze the game).
+      // Moves. Wrap the callback so a malformed payload from a client can't throw and
+      // tear down the host's move listener (which would freeze the game).
       this._movesRef = this._roomRef.child('moves');
       this._moveCallback = (snap) => {
         try {
@@ -314,34 +479,40 @@ const app = {
       this.showWaiting();
     }).catch((err) => {
       this.log('error', 'room creation failed:', err);
-      this.toast('Could not create room: ' + err.message);
+      this.toast('Could not create the room: ' + err.message);
     });
   },
 
   joinGame() {
-    if (!this._db) { this.showConfigError(); this.toast('Connection unavailable — check Firebase configuration'); return; }
-    const name = document.getElementById('join-name').value.trim();
-    if (!name) { this.toast('Please enter your name'); return; }
+    if (!this._db) { this.showConfigError(); this.toast('Online play is not available'); return; }
+    const code = document.getElementById('j-code').value.trim().toUpperCase();
+    if (!code) { this.toast('Enter the room code'); return; }
+    const name = this.readName('j-name'); if (!name) return;
+    Juice.unlock();
+    this.roomCode = code;
     this.myName = name;
     this.isHost = false;
+    this._isBotGame = false;
     this.moveLog = [];
 
     this._roomRef = this._db.ref('rooms/' + this.roomCode);
 
     this._roomRef.once('value').then((snap) => {
       const room = snap.val();
-      if (!room || !room.host) {
-        this.toast('Room not found!');
-        return;
-      }
-      const playerCount = room.playerCount || 4;
+      if (!room || !room.host) { this.toast('Room not found'); return; }
+      // a slot freed by a dropped player must not let a newcomer into a running game
+      if (room.started) { this.toast('That game has already started'); return; }
+      const playerCount = room.playerCount || 2;
+      this.playerCount = playerCount;
+      this.forceCapture = room.forceCapture !== false;
+      this.captureAssist = !!room.captureAssist;
+      this.winScore = room.winScore || 21;
+      this.turnTimerDuration = room.turnTimerDuration || 0;
+      Look.setLook(room.look || Look.DEFAULT_LOOK, false);
 
-      // Claim the first free slot atomically. A plain read-then-write let two players
-      // racing the same link grab the same slot. The transaction callback must be pure
-      // and re-entrant (Firebase may run it several times), so it recomputes the slot
-      // from the current value each run. claimedSlot is set on every run, so after the
-      // committing run it holds the slot we actually took — unambiguous even if two
-      // players share a display name.
+      // Claim the first free slot atomically. The transaction callback must be pure and
+      // re-entrant (Firebase may run it several times), so it recomputes the slot from
+      // the current value each run; claimedSlot holds the slot of the committing run.
       let claimedSlot = -1;
       this._roomRef.child('players').transaction((players) => {
         players = players || {};
@@ -355,7 +526,7 @@ const app = {
         return players;
       }, (err, committed) => {
         if (err) { this.log('error', 'slot-claim transaction failed:', err); this.toast('Could not join: ' + err.message); return; }
-        if (!committed || claimedSlot < 0) { this.log('info', 'join rejected: room full'); this.toast('Room is full!'); return; }
+        if (!committed || claimedSlot < 0) { this.log('info', 'join rejected: room full'); this.toast('Room is full'); return; }
 
         const myId = claimedSlot;
         this.myPlayerId = myId;
@@ -363,7 +534,8 @@ const app = {
         // Free our slot if we disconnect, so a refresh/drop doesn't leave a ghost that
         // blocks rejoining or stalls turn rotation.
         this._roomRef.child('players/' + myId).onDisconnect().remove();
-        this.toast('Joined room!');
+        this.toast('Joined');
+        this.roomLink = window.location.href.split('?')[0] + '?room=' + this.roomCode;
 
         const stateRef = this._roomRef.child('state');
         stateRef.on('value', (s) => {
@@ -381,7 +553,7 @@ const app = {
           try {
             this.myHand = s.val() || [];
             this.log('debug', 'hand updated:', this.myHand.length, 'cards');
-            this.renderGame();
+            if (this.gameState) this.renderGame();
           } catch (e) {
             this.log('error', 'hand update handler threw:', e);
           }
@@ -391,52 +563,41 @@ const app = {
         const logRef = this._roomRef.child('log');
         logRef.on('value', (s) => {
           const log = s.val();
-          if (log) this.moveLog = log.slice(-50);
+          if (log) { this.moveLog = log.slice(-50); if (this.menuOpen && this.menuTab === 'log') this.renderMenuContent(); }
         });
         this._playerListeners.push(logRef);
 
-        // Detect the host leaving WITHOUT subscribing to the whole room node — doing that
-        // streamed every player's private hand_* to every client. The host child is set
-        // once at creation and removed when the host leaves or disconnects.
         const emoteRef = this._roomRef.child('emote');
         emoteRef.on('value', (s) => {
           const e = s.val();
-          if (e && e.name && e.text) {
-            const el = document.getElementById('emote-display');
-            if (el) {
-              el.textContent = `${e.name}: ${e.text}`;
-              el.classList.remove('hidden');
-              if (this._emoteTimeout) clearTimeout(this._emoteTimeout);
-              this._emoteTimeout = setTimeout(() => { el.classList.add('hidden'); this._emoteTimeout = null; }, 2000);
-            }
-          }
+          if (e && e.name && e.text) this.showEmote(e.name, e.text);
         });
         this._playerListeners.push(emoteRef);
 
+        // Detect the host leaving WITHOUT subscribing to the whole room node (that streamed
+        // every player's private hand_* to every client). The host child is set once at
+        // creation and removed when the host leaves.
         const hostRef = this._roomRef.child('host');
         hostRef.on('value', (s) => {
           if (!s.val() && this.gameState) {
-            this.log('info', 'host left — returning to lobby');
-            this.toast('The host left — game ended');
+            this.log('info', 'host left, returning to the menu');
+            this.toast('The host left, the game is over');
             this.backToLobby();
           }
         });
         this._playerListeners.push(hostRef);
 
-        this.showPlayerConnected();
-
         const joinPlayersRef = this._roomRef.child('players');
         joinPlayersRef.on('value', (snap) => {
           const pdata = snap.val() || {};
+          this._playerSlots = pdata;
           this.playerList = [];
-          const pc = playerCount;
-          for (let i = 0; i < pc; i++) {
-            if (pdata[i]) this.playerList.push(pdata[i]);
-          }
-          this.playerCount = pc;
-          this.renderConnectedPlayers();
+          for (let i = 0; i < playerCount; i++) if (pdata[i]) this.playerList.push(pdata[i]);
+          if (!this.gameState) this.renderWaiting();
         });
         this._playerListeners.push(joinPlayersRef);
+
+        this.showWaiting();
       });
     }).catch((err) => {
       this.log('error', 'join failed (room read):', err);
@@ -444,99 +605,48 @@ const app = {
     });
   },
 
-  // ========== LOBBY / WAITING ==========
-  showWaiting() {
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('waiting-view').classList.add('active');
-    document.getElementById('room-link-display').textContent = this.roomLink;
-    this.renderWaiting();
-  },
-
-  showPlayerConnected() {
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('connected-view').classList.add('active');
-    document.getElementById('connected-room').textContent = this.roomCode;
-  },
-
-  renderConnectedPlayers() {
-    const el = document.getElementById('connected-players');
-    if (!el) return;
-    const players = this.playerList || [];
-    if (players.length === 0) return;
-
-    if (this.playerCount === 4) {
-      const team1 = [], team2 = [];
-      players.forEach((name, i) => {
-        if (i % 2 === 0) team1.push({ name, slot: i });
-        else team2.push({ name, slot: i });
-      });
-      el.innerHTML =
-        '<div class="team-groups">' +
-        '<div class="team-group"><div class="team-label" style="color:var(--team1)">Team 1</div>' +
-        team1.map(p => `<div class="player-chip"><span class="dot team1"></span>${escapeHtml(p.name)}${p.slot === this.myPlayerId ? ' (You)' : ''}${p.slot === 0 ? ' ★' : ''}</div>`).join('') +
-        '</div><div class="team-group"><div class="team-label" style="color:var(--team2)">Team 2</div>' +
-        team2.map(p => `<div class="player-chip"><span class="dot team2"></span>${escapeHtml(p.name)}${p.slot === this.myPlayerId ? ' (You)' : ''}${p.slot === 0 ? ' ★' : ''}</div>`).join('') +
-        '</div></div>';
-    } else {
-      el.innerHTML = players.map((name, i) =>
-        `<div class="player-chip">${escapeHtml(name)}${i === this.myPlayerId ? ' (You)' : ''}${i === 0 ? ' (Host)' : ''}</div>`
-      ).join('');
-    }
-  },
-
+  // ========== WAITING ROOM ==========
   renderWaiting() {
-    const list = document.getElementById('waiting-players');
-    const players = this.playerList || [];
+    const $ = (id) => document.getElementById(id);
+    $('w-code').textContent = this.roomCode;
+    $('w-link').textContent = this.roomLink;
+    $('w-sub').textContent = this.isHost ? 'share the code or the link' : 'joined as ' + this.myName;
     const slots = this._playerSlots || {};
-
-    if (this.playerCount === 4) {
-      const renderSlot = (slot, teamClass) => {
-        if (slots[slot]) {
-          const isBot = !!this._botPlayers[slot];
-          const isHostSlot = slot === 0;
-          const swapBtn = this.isHost && !isHostSlot ? ` <button class="btn-swap" onclick="app.swapPlayers(${slot})">&#8596;</button>` : '';
-          const removeBtn = this.isHost && isBot ? ` <button class="btn-swap btn-remove-bot" onclick="app.removeBotFromWaiting(${slot})" title="Remove bot">&#10005;</button>` : '';
-          return `<div class="player-chip"><span class="dot ${teamClass}"></span>${isBot ? '<span class="bot-badge">BOT</span> ' : ''}${escapeHtml(slots[slot])}${isHostSlot ? ' (Host)' : ''}${removeBtn}${swapBtn}</div>`;
-        }
-        if (this.isHost) {
-          return `<div class="player-chip empty-slot"><span class="dot ${teamClass}" style="opacity:0.3"></span><span style="color:var(--text-dim)">Empty</span> <button class="btn-swap btn-add-bot" onclick="app.addBotToWaiting(${slot})">+ Bot</button></div>`;
-        }
-        return `<div class="player-chip empty-slot"><span class="dot ${teamClass}" style="opacity:0.3"></span><span style="color:var(--text-dim)">Waiting...</span></div>`;
-      };
-      list.innerHTML =
-        '<div class="team-groups">' +
-        '<div class="team-group"><div class="team-label" style="color:var(--team1)">Team 1</div>' +
-        renderSlot(0, 'team1') + renderSlot(2, 'team1') +
-        '</div><div class="team-group"><div class="team-label" style="color:var(--team2)">Team 2</div>' +
-        renderSlot(1, 'team2') + renderSlot(3, 'team2') +
-        '</div></div>';
-    } else {
-      let html = '';
-      for (let slot = 0; slot < this.playerCount; slot++) {
-        if (slots[slot]) {
-          const isBot = !!this._botPlayers[slot];
-          const isHostSlot = slot === 0;
-          const removeBtn = this.isHost && isBot ? ` <button class="btn-swap btn-remove-bot" onclick="app.removeBotFromWaiting(${slot})" title="Remove bot">&#10005;</button>` : '';
-          html += `<div class="player-chip"><span class="dot"></span>${isBot ? '<span class="bot-badge">BOT</span> ' : ''}${escapeHtml(slots[slot])}${isHostSlot ? ' (Host)' : ''}${removeBtn}</div>`;
-        } else if (this.isHost) {
-          html += `<div class="player-chip empty-slot"><span class="dot" style="opacity:0.3"></span><span style="color:var(--text-dim)">Empty</span> <button class="btn-swap btn-add-bot" onclick="app.addBotToWaiting(${slot})">+ Bot</button></div>`;
-        } else {
-          html += `<div class="player-chip empty-slot"><span class="dot" style="opacity:0.3"></span><span style="color:var(--text-dim)">Waiting...</span></div>`;
-        }
+    const box = $('w-slots'); box.innerHTML = '';
+    const n = this.playerCount;
+    const order = n === 4 ? [0, 2, 1, 3] : [0, 1];   // teams read as columns: team 1 left, team 2 right
+    order.forEach((slot) => {
+      const d = document.createElement('div');
+      const team = n === 4 ? (slot % 2) + 1 : slot + 1;
+      const who = slots[slot];
+      d.className = `slot t${team}${who ? '' : ' empty'}`;
+      if (who) {
+        const isBot = !!this._botPlayers[slot];
+        const btns = [];
+        if (this.isHost && isBot) btns.push(`<button class="pill sm ghost" data-act="removebot" data-slot="${slot}" title="Remove bot">✕</button>`);
+        if (this.isHost && n === 4 && slot !== 0) btns.push(`<button class="pill sm ghost" data-act="swap" data-slot="${slot}" title="Swap team">⇄</button>`);
+        d.innerHTML = `<div class="av">${isBot ? 'BOT' : escapeHtml(who.charAt(0).toUpperCase())}</div>
+          <div class="who">${isBot ? '<span class="bot">bot</span>' : ''}${escapeHtml(who)}${slot === this.myPlayerId ? ' (you)' : ''}<small>${n === 4 ? `Team ${team}` : slot === 0 ? 'host' : 'guest'}</small></div>
+          <div class="btns">${btns.join('')}</div>`;
+      } else if (this.isHost) {
+        d.innerHTML = `<span>empty</span><div class="btns"><button class="pill sm chip" data-act="addbot" data-slot="${slot}">+ bot</button></div>`;
+      } else {
+        d.textContent = 'waiting for a player';
       }
-      list.innerHTML = html;
-    }
+      box.appendChild(d);
+    });
 
-    const btn = document.getElementById('start-game-btn');
+    const filled = order.filter((s) => slots[s]).length;
+    const remaining = n - filled;
+    const btn = $('w-start');
+    btn.hidden = !this.isHost;
     if (this.isHost) {
-      const ready = players.length >= this.playerCount && !this._roomStarted;
-      btn.classList.remove('hidden');
-      btn.disabled = !ready;
-      const remaining = this.playerCount - players.length;
-      if (this._roomStarted) btn.textContent = 'Starting...';
-      else if (remaining > 0) btn.textContent = `Waiting for ${remaining} more player${remaining !== 1 ? 's' : ''}...`;
-      else btn.textContent = 'Start Game';
+      btn.disabled = remaining > 0 || this._roomStarted;
+      btn.textContent = this._roomStarted ? 'Starting' : 'Start';
     }
+    $('w-note').textContent = this.isHost
+      ? (remaining > 0 ? `waiting for ${remaining} more player${remaining !== 1 ? 's' : ''}` : 'everyone is here')
+      : 'the host starts the game';
   },
 
   swapPlayers(slot) {
@@ -564,8 +674,9 @@ const app = {
   },
 
   copyRoomLink() {
+    if (!this.roomLink) { this.toast('No room link in a bot game'); return; }
     navigator.clipboard.writeText(this.roomLink).then(() => {
-      this.toast('Link copied!');
+      this.toast('Link copied');
     }).catch(() => {
       this.toast('Share this link: ' + this.roomLink);
     });
@@ -582,8 +693,9 @@ const app = {
     this.playerList = [];
     this._botPlayers = {};
     this._playerSlots = {};
+    this._roomStarted = false;
     this.stopTurnTimer();
-    this.showLobby();
+    this.showMenu();
   },
 
   backToLobby() {
@@ -593,6 +705,7 @@ const app = {
     this._stateRef = null;
     this._movesRef = null;
     this.gameState = null;
+    this._shown = null;
     this.myHand = [];
     this.selectedCardIndex = -1;
     this.selectedCaptureIndices = [];
@@ -601,16 +714,16 @@ const app = {
     this.playerList = [];
     this._botPlayers = {};
     this._playerSlots = {};
+    this._roomStarted = false;
+    this._isBotGame = false;
+    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
     this.stopTurnTimer();
-    const modal = document.getElementById('score-modal');
-    if (modal) modal.classList.add('hidden');
-    this.showLobby();
+    this.closeAllOverlays();
+    this.showMenu();
   },
 
   cleanupListeners() {
-    this._playerListeners.forEach(ref => {
-      if (ref) ref.off();
-    });
+    this._playerListeners.forEach(ref => { if (ref) ref.off(); });
     this._playerListeners = [];
     this._moveCallback = null;
   },
@@ -632,37 +745,35 @@ const app = {
   showConfigError() {
     this._dbError = true;
     const banner = document.getElementById('config-error');
-    if (banner) banner.classList.remove('hidden');
-    ['create-game-btn', 'join-game-btn'].forEach(id => {
-      const btn = document.getElementById(id);
-      if (btn) btn.disabled = true;
-    });
+    if (banner) banner.hidden = false;
+    ['m-create', 'j-go'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
   },
 
   // ========== PLAY VS BOT ==========
   playVsBot() {
-    const name = document.getElementById('player-name').value.trim();
-    if (!name) { this.toast('Please enter your name'); return; }
+    const name = this.readName('menu-name'); if (!name) return;
+    Juice.unlock();
     this.myName = name;
     this.isHost = true;
     this._isBotGame = true;
     this.playerCount = 2;
-    this.forceCapture = document.getElementById('force-capture').checked;
-    this.winScore = parseInt(document.getElementById('win-score').value);
-    this.turnTimerDuration = parseInt(document.getElementById('turn-timer').value);
-    this.botDifficulty = document.getElementById('bot-difficulty').value;
-    this.gameSpeed = document.getElementById('game-speed').value;
+    this.forceCapture = !!this.opts.forceCapture;
+    this.captureAssist = !!this.opts.captureAssist;
+    this.winScore = +this.opts.winScore;
+    this.turnTimerDuration = +this.opts.timer;
+    this.botDifficulty = this.opts.bot;
+    this.gameSpeed = this.opts.speed;
+    Look.setLook(Look.savedLook(), false);
 
     this.roomCode = 'BOT';
+    this.roomLink = '';
     this.myPlayerId = 0;
-    const botNames = { easy: 'Bot (Easy)', medium: 'Bot', hard: 'Bot (Hard)' };
+    const botNames = { easy: 'Bot (easy)', medium: 'Bot', hard: 'Bot (hard)' };
     this.playerList = [this.myName, botNames[this.botDifficulty] || 'Bot'];
     this.moveLog = [];
     this._roomRef = null;
     this._botPlayers = {};
     this._playerSlots = {};
-
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     this.startGame();
   },
 
@@ -690,8 +801,8 @@ const app = {
     if (!this.isHost || !this._roomRef) return;
     if (this._playerSlots[slot]) { this.toast('Slot is taken'); return; }
 
-    const diff = document.getElementById('bot-difficulty').value || 'medium';
-    const botNames = { easy: 'Bot (Easy)', medium: 'Bot', hard: 'Bot (Hard)' };
+    const diff = this.opts.bot || 'medium';
+    const botNames = { easy: 'Bot (easy)', medium: 'Bot', hard: 'Bot (hard)' };
     let name = botNames[diff] || 'Bot';
 
     const existing = Object.values(this._playerSlots).filter(Boolean);
@@ -717,9 +828,7 @@ const app = {
     this.toast('Bot removed');
   },
 
-  botPlay() {
-    this.triggerBotPlay();
-  },
+  botPlay() { this.triggerBotPlay(); },
 
   botPlayForPlayer(playerId) {
     if (!this.isHost) return;
@@ -789,12 +898,25 @@ const app = {
       }
     }
 
+    // The delay is a function of the speed setting only, never of the hand (a
+    // hand-dependent think time would leak information). The move waits for the
+    // board to finish animating the previous one so no two moves overlap.
     const delays = { slow: 1200 + Math.random() * 800, normal: 600 + Math.random() * 800, fast: 200 + Math.random() * 300 };
+    const token = gs.gameToken;
     setTimeout(() => {
-      if (this.gameState && this.gameState.currentTurn === playerId) {
-        this.handlePlay({ playerId, ...bestMove });
-      }
+      this.whenIdle().then(() => {
+        const cur = this.gameState;
+        if (cur && cur.gameToken === token && cur.phase === 'playing' && cur.currentTurn === playerId) {
+          this.handlePlay({ playerId, ...bestMove });
+        }
+      });
     }, delays[this.gameSpeed] || delays.normal);
+  },
+
+  // Resolves once the render queue is idle (no choreography running).
+  whenIdle() {
+    if (!this._animating) return Promise.resolve();
+    return new Promise((r) => this._idleResolvers.push(r));
   },
 
   // ========== START GAME ==========
@@ -806,24 +928,29 @@ const app = {
     if (players.length < numPlayers) { this.toast('Not enough players'); return; }
 
     this._roomStarted = true;
+    if (this._roomRef) this._roomRef.update({ started: true }).catch((err) => this.log('warn', 'could not mark the room started:', err.message));
 
     const totalPlayerCards = numPlayers * 3;
     const remainingRounds = Math.ceil((40 - 4 - totalPlayerCards) / totalPlayerCards);
     const totalRounds = 1 + remainingRounds;
 
     this.moveLog = [];
+    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
+    this.closeAllOverlays();
 
     this.gameState = {
       phase: 'playing', numPlayers,
-      players: players.map((name, i) => ({ id: i, name, team: numPlayers === 4 ? (i % 2) : i })),
+      gameToken: Date.now(),
+      players: players.map((name, i) => ({ id: i, name, team: numPlayers === 4 ? (i % 2) : i, isBot: this.isBotPlayer(i) })),
       deck: shuffle(createDeck()), tableCards: [], hands: players.map(() => []),
       capturedTeams: [[], []], currentTurn: -1, dealerIndex: 0, roundNum: 0, totalRounds,
       cardsPlayedThisRound: players.map(() => 0), lastCaptureTeam: -1,
       shkobbaCount: [0, 0], scores: [0, 0],
-      forceCapture: this.forceCapture, winScore: this.winScore, shkobbaThisTurn: false,
-      turnTimerDuration: this.turnTimerDuration, lastCapture: null,
+      forceCapture: this.forceCapture, captureAssist: this.captureAssist, winScore: this.winScore, shkobbaThisTurn: false,
+      turnTimerDuration: this.turnTimerDuration, lastMove: null, moveSeq: 0,
+      look: Look.get(), endReason: null,
     };
-    this.addLogEntry('🎴 Game started!');
+    this.addLogEntry('Game started');
     this.log('info', 'game started:', numPlayers, 'players, win at', this.winScore);
     this.dealRound();
   },
@@ -831,7 +958,6 @@ const app = {
   // ========== DEALING ==========
   dealRound() {
     const gs = this.gameState;
-    this.animateDeal = true;
     if (gs.roundNum === 0) {
       for (let i = 0; i < 4 && gs.deck.length > 0; i++) gs.tableCards.push(gs.deck.pop());
       gs.currentTurn = (gs.dealerIndex + 1) % gs.numPlayers;
@@ -844,7 +970,7 @@ const app = {
     }
     gs.cardsPlayedThisRound = gs.cardsPlayedThisRound.map(() => 0);
     gs.shkobbaThisTurn = false;
-    this.addLogEntry('📤 Cards dealt — Round ' + (gs.roundNum + 1));
+    this.addLogEntry('Cards dealt, hand ' + (gs.roundNum + 1));
     this.broadcastGameState();
     this.renderGame();
     this.startTurnTimer();
@@ -883,29 +1009,26 @@ const app = {
   },
 
   // ========== TURN TIMER ==========
+  // One anchor per turn: the clock restarts when the turn changes, not on every
+  // broadcast, so a host toggling a setting mid-turn does not reset everyone's timer.
+  turnKey(gs) { return gs ? `${gs.gameToken}:${gs.roundNum}:${gs.moveSeq}:${gs.currentTurn}` : ''; },
+
   startTurnTimer() {
-    this.stopTurnTimer();
     const gs = this.gameState;
-    if (this._gameFrozen || (gs && gs.frozen)) return;
-    if (!gs || gs.phase !== 'playing' || !gs.turnTimerDuration || gs.turnTimerDuration <= 0) {
-      this.updateTimerDisplay(1, gs ? gs.turnTimerDuration : 0);
-      return;
+    if (this._timerRAF) { cancelAnimationFrame(this._timerRAF); this._timerRAF = null; }
+    if (this._turnTimer) { clearTimeout(this._turnTimer); this._turnTimer = null; }
+    if (!gs) return;
+    const key = this.turnKey(gs);
+    if (key !== this._turnKey) { this._turnKey = key; this._turnTimerStart = Date.now(); this._lastTimerSec = 0; }
+    if (this._gameFrozen || gs.frozen) { this.renderTurnLabel(gs); return; }
+    if (gs.phase !== 'playing' || gs.currentTurn < 0) { this.renderTurnLabel(gs); return; }
+
+    const duration = gs.turnTimerDuration || 0;
+    if (duration > 0 && this.isHost) {
+      const remaining = Math.max(0, duration * 1000 - (Date.now() - this._turnTimerStart));
+      this._turnTimer = setTimeout(() => this.whenIdle().then(() => this.autoPlay()), remaining);
     }
-    if (gs.currentTurn < 0) return;
-
-    this._lastTimerSec = 0;
-    this._turnTimerStart = Date.now();
-    this._turnTimerRemaining = gs.turnTimerDuration;
-
-    // Only host runs the actual timeout
-    if (this.isHost) {
-      this._turnTimer = setTimeout(() => {
-        this.autoPlay();
-      }, gs.turnTimerDuration * 1000);
-    }
-
-    // All clients animate the bar
-    this.animateTimerBar();
+    this.animateTurnFill();
   },
 
   stopTurnTimer() {
@@ -913,64 +1036,42 @@ const app = {
     if (this._timerRAF) { cancelAnimationFrame(this._timerRAF); this._timerRAF = null; }
   },
 
-  animateTimerBar() {
-    const gs = this.gameState;
-    if (!gs || !gs.turnTimerDuration || gs.turnTimerDuration <= 0) return;
-
-    const totalMs = gs.turnTimerDuration * 1000;
-    const bar = document.getElementById('timer-bar');
-    const text = document.getElementById('timer-text');
-    if (!bar) return;
-
+  // The turn label is its own progress bar: the text drains as the timer runs. With
+  // no timer, an opponent's turn breathes slowly and mine sits full.
+  animateTurnFill() {
+    const el = document.getElementById('turn-fill');
     const tick = () => {
-      const elapsed = Date.now() - this._turnTimerStart;
-      const remaining = Math.max(0, totalMs - elapsed);
-      const fraction = remaining / totalMs;
-
-      bar.style.width = (fraction * 100) + '%';
-
-      // Color transitions
-      bar.classList.remove('warning', 'danger');
-      if (fraction < 0.2) bar.classList.add('danger');
-      else if (fraction < 0.45) bar.classList.add('warning');
-
-      if (text) {
+      this._timerRAF = null;
+      const gs = this.gameState;
+      if (!gs || gs.phase !== 'playing' || gs.currentTurn < 0) return;
+      const duration = gs.turnTimerDuration || 0;
+      const mine = gs.currentTurn === this.activeId();
+      if (duration > 0) {
+        const totalMs = duration * 1000;
+        const remaining = Math.max(0, totalMs - (Date.now() - this._turnTimerStart));
+        Juice.fill(el, remaining / totalMs);
         const secs = Math.ceil(remaining / 1000);
-        text.textContent = secs > 0 ? secs + 's' : '';
-
-        if (secs <= 5 && secs > 0 && this._lastTimerSec !== secs) {
+        el.classList.toggle('urgent', secs <= 5 && secs > 0);
+        if (mine && secs <= 5 && secs > 0 && this._lastTimerSec !== secs) {
           this._lastTimerSec = secs;
           this.playSound('warning');
-
-          const container = document.getElementById('timer-bar-container');
-          if (container) {
-            container.classList.add('pulse-shake');
-            setTimeout(() => container.classList.remove('pulse-shake'), 200);
-          }
         }
+        if (remaining <= 0) return;
+      } else if (mine) {
+        Juice.fill(el, 1);
+      } else {
+        Juice.fill(el, 0.55 + 0.45 * Math.sin(Date.now() / 600));
       }
-
-      if (remaining > 0) {
-        this._timerRAF = requestAnimationFrame(tick);
-      }
+      this._timerRAF = requestAnimationFrame(tick);
     };
     this._timerRAF = requestAnimationFrame(tick);
-  },
-
-  updateTimerDisplay(fraction, duration) {
-    const bar = document.getElementById('timer-bar');
-    const text = document.getElementById('timer-text');
-    if (bar) {
-      bar.style.width = (!duration || duration <= 0) ? '0%' : (fraction * 100) + '%';
-      bar.classList.remove('warning', 'danger');
-    }
-    if (text) text.textContent = '';
   },
 
   autoPlay() {
     if (!this.isHost) return;
     const gs = this.gameState;
     if (!gs || gs.phase !== 'playing' || gs.currentTurn < 0) return;
+    if (this._gameFrozen) return;
 
     this.playSound('timeout');
 
@@ -1001,8 +1102,8 @@ const app = {
     }
 
     const playerName = gs.players[playerId] ? gs.players[playerId].name : 'Player ' + playerId;
-    this.addLogEntry(`⏰ Time's up! ${playerName} auto-played ${getCardDisplayName(card)}`);
-    this.toast(`⏰ ${playerName} ran out of time!`);
+    this.addLogEntry(`Time's up: ${playerName} auto-played ${getCardDisplayName(card)}`);
+    this.toast(`${playerName} ran out of time`);
 
     this.handlePlay({ playerId, cardId: card.id, captureCardIds: captureIds });
   },
@@ -1012,6 +1113,7 @@ const app = {
     if (!this.isHost) return;
     const gs = this.gameState, playerId = data.playerId;
     if (!gs) { this.log('warn', 'handlePlay ignored: no game state'); return; }
+    if (gs.phase !== 'playing') { this.log('warn', 'move rejected: phase', gs.phase); return; }
     if (playerId !== gs.currentTurn) {
       this.log('warn', 'move rejected: out of turn (player', playerId, 'current', gs.currentTurn + ')');
       return;
@@ -1031,8 +1133,6 @@ const app = {
 
     const playedCard = hand[cardIndex];
     const captureIds = data.captureCardIds || [];
-    const possibleCaptures = findCaptureCombinations(gs.tableCards, playedCard.value);
-    const hasValidCapture = possibleCaptures.length > 0;
 
     if (captureIds.length > 0) {
       const capIndices = captureIds.map(id => gs.tableCards.findIndex(c => c.id === id));
@@ -1061,6 +1161,9 @@ const app = {
     hand.splice(cardIndex, 1);
     const teamIndex = gs.players[playerId].team;
     const playerName = gs.players[playerId].name;
+    const slim = (c) => ({ id: c.id, name: c.name, suit: c.suit, display: c.display, value: c.value });
+    gs.moveSeq = (gs.moveSeq || 0) + 1;
+    gs.lastMove = { seq: gs.moveSeq, playerId, teamIndex, card: slim(playedCard), taken: [], chkobba: false };
 
     if (captureIds.length > 0) {
       const capturedCards = [];
@@ -1069,70 +1172,57 @@ const app = {
         const idx = gs.tableCards.findIndex(c => c.id === id);
         if (idx !== -1) capturedCards.push(...gs.tableCards.splice(idx, 1));
       }
+      gs.lastMove.taken = capturedCards.map(slim);
       capturedCards.push(playedCard);
       gs.capturedTeams[teamIndex].push(...capturedCards);
       gs.lastCaptureTeam = teamIndex;
 
-      gs.lastCapture = {
-        playerName,
-        teamIndex,
-        playedCard: { name: playedCard.name, suit: playedCard.suit, display: playedCard.display },
-        capturedCards: capturedCards.filter(c => c.id !== playedCard.id).map(c => ({ name: c.name, suit: c.suit, display: c.display })),
-      };
+      const capturedNames = gs.lastMove.taken.map(c => getCardDisplayName(c)).join('+');
+      let logMsg = `${playerName} took ${capturedNames} with ${getCardDisplayName(playedCard)}`;
 
-      const capturedNames = capturedCards.filter(c => c.id !== playedCard.id).map(c => getCardDisplayName(c)).join('+');
-      let logMsg = `${playerName} captured ${capturedNames} with ${getCardDisplayName(playedCard)}`;
-
-      // Shkobba: clearing the table
+      // Chkobba: clearing the table. The dealer's very last card of the deal does not count.
       if (gs.tableCards.length === 0) {
         if (playerId === gs.dealerIndex && hand.length === 0 && gs.deck.length === 0) {
-          // Last card of dealer, no shkobba
+          // last card of the dealer, no chkobba
         } else {
           gs.shkobbaCount[teamIndex]++;
           gs.shkobbaThisTurn = true;
-          logMsg += ' — SHKOBBA! 🎉';
+          gs.lastMove.chkobba = true;
+          logMsg += ', CHKOBBA';
         }
       }
 
       this.addLogEntry(logMsg);
 
-      if (gs.shkobbaThisTurn) {
-        this.playSound('shkobba');
-      } else {
-        this.playSound('capture');
-      }
-
       // Instant win: all 10 diamonds captured
       const diaCount = gs.capturedTeams[teamIndex].filter(c => c.suit === DIAMONDS).length;
       if (diaCount >= 10) {
-        this.addLogEntry('🏆 All 10 diamonds captured! Instant win!');
-        this.toast('All 10 diamonds captured! Instant win!');
+        this.addLogEntry('All 10 diamonds captured, instant win');
         gs.phase = 'finished';
         gs.winner = teamIndex;
+        gs.endReason = 'diamonds';
         gs.currentTurn = -1;
         this.playSound('win');
         this.broadcastGameState();
         this.renderGame();
-        this.showScoreboard();
         return;
       }
     } else {
       gs.tableCards.push(playedCard);
-      gs.lastCapture = null;
       this.addLogEntry(`${playerName} placed ${getCardDisplayName(playedCard)}`);
-      this.playSound('place');
     }
 
     gs.cardsPlayedThisRound[playerId]++;
+    if (playerId === this.activeId()) { this.isSubmittingMove = false; this.cancelSelection(false); }
 
     if (gs.hands.every(h => h.length === 0) && gs.deck.length === 0) {
       gs.currentTurn = -1;
-      setTimeout(() => this.endRound(), 1000);
+      setTimeout(() => this.whenIdle().then(() => this.gameState === gs && this.endRound()), 400);
       this.broadcastGameState(); this.renderGame();
     } else if (gs.hands.every(h => h.length === 0)) {
       gs.nextDealerTurn = (playerId + 1) % gs.numPlayers;
       gs.currentTurn = -1;
-      setTimeout(() => this.endRound(), 1000);
+      setTimeout(() => this.whenIdle().then(() => this.gameState === gs && this.endRound()), 400);
       this.broadcastGameState(); this.renderGame();
     } else {
       this.nextTurn();
@@ -1142,7 +1232,7 @@ const app = {
   // ========== SCORING ==========
   calculateScores() {
     const gs = this.gameState;
-    const teamCount = gs.numPlayers === 4 ? 2 : gs.numPlayers;
+    const teamCount = 2;
 
     const capturedCounts = [gs.capturedTeams[0].length, gs.capturedTeams[1].length];
     const diamondCounts = [0, 0], diamondSevens = [false, false];
@@ -1162,17 +1252,8 @@ const app = {
     let sevenDiamondsPt = -1;
     if (diamondSevens[0] && !diamondSevens[1]) sevenDiamondsPt = 0;
     else if (!diamondSevens[0] && diamondSevens[1]) sevenDiamondsPt = 1;
-    else if (diamondSevens[0] && diamondSevens[1]) {
-      for (let val = 6; val >= 1; val--) {
-        const name = val === 1 ? 'ace' : String(val);
-        const t0 = gs.capturedTeams[0].some(c => c.suit === DIAMONDS && c.name === name);
-        const t1 = gs.capturedTeams[1].some(c => c.suit === DIAMONDS && c.name === name);
-        if (t0 && !t1) { sevenDiamondsPt = 0; break; }
-        if (!t0 && t1) { sevenDiamondsPt = 1; break; }
-      }
-    }
 
-    // Most Sevens rule: whoever has more 7s gets +1. Tie on 7s → check 6s. Tie on 6s → no point.
+    // Most Sevens rule: more 7s gets +1. Tie on 7s: check 6s. Tie on 6s: no point.
     const sevenCounts = [0, 0];
     const sixCounts = [0, 0];
     for (let t = 0; t < teamCount; t++) {
@@ -1184,10 +1265,8 @@ const app = {
     let mostSevensPt = -1;
     if (sevenCounts[0] !== sevenCounts[1]) {
       mostSevensPt = sevenCounts[0] > sevenCounts[1] ? 0 : 1;
-    } else {
-      if (sixCounts[0] !== sixCounts[1]) {
-        mostSevensPt = sixCounts[0] > sixCounts[1] ? 0 : 1;
-      }
+    } else if (sixCounts[0] !== sixCounts[1]) {
+      mostSevensPt = sixCounts[0] > sixCounts[1] ? 0 : 1;
     }
 
     if (mostCardsPt >= 0) gs.scores[mostCardsPt]++;
@@ -1197,14 +1276,16 @@ const app = {
     gs.scores[0] += gs.shkobbaCount[0];
     gs.scores[1] += gs.shkobbaCount[1];
 
-    gs.lastScore = { mostCardsPt, mostDiamondsPt, sevenDiamondsPt, mostSevensPt };
+    // counts travel with the verdicts so every client can stage the same tally
+    gs.lastScore = {
+      mostCardsPt, mostDiamondsPt, sevenDiamondsPt, mostSevensPt,
+      counts: { cards: capturedCounts, diamonds: diamondCounts, haya: diamondSevens.map(Number), sevens: sevenCounts, sixes: sixCounts },
+    };
     gs.phase = 'round_end';
-    this.addLogEntry(`📊 Round scored — Team 1: ${gs.scores[0]}, Team 2: ${gs.scores[1]}`);
-    this.log('info', 'round scored:', gs.scores[0], '-', gs.scores[1],
-      '(cards/diamonds/7♦ pts:', mostCardsPt, mostDiamondsPt, sevenDiamondsPt + ')');
+    this.addLogEntry(`Deal scored: ${gs.scores[0]} - ${gs.scores[1]}`);
+    this.log('info', 'round scored:', gs.scores[0], '-', gs.scores[1]);
     this.broadcastGameState();
     this.renderGame();
-    this.showScoreboard();
   },
 
   checkWinCondition() {
@@ -1215,21 +1296,21 @@ const app = {
       else if (gs.scores[1] > gs.scores[0]) winner = 1;
     }
     if (winner >= 0) {
-      gs.phase = 'finished'; gs.winner = winner;
-      this.addLogEntry(`🏆 Team ${winner + 1} wins the game!`);
+      gs.phase = 'finished'; gs.winner = winner; gs.endReason = 'score';
+      this.addLogEntry(`Team ${winner + 1} wins the game`);
       this.log('info', 'game over: Team', winner + 1, 'wins', gs.scores[0], '-', gs.scores[1]);
       this.playSound('win');
-      this.broadcastGameState(); this.renderGame(); this.showScoreboard();
+      this.broadcastGameState(); this.renderGame();
       return;
     }
     if (gs.deck.length > 0) { gs.phase = 'playing'; this.dealRound(); return; }
 
-    // Deck is empty: increment dealer for the new deck!
+    // Deck is empty: the deal passes on and a fresh deck goes out
     gs.dealerIndex = (gs.dealerIndex + 1) % gs.numPlayers;
     gs.totalRounds = 1 + Math.ceil((40 - 4 - gs.numPlayers * 3) / (gs.numPlayers * 3));
     gs.phase = 'playing'; gs.deck = shuffle(createDeck());
     gs.capturedTeams = [[], []]; gs.shkobbaCount = [0, 0]; gs.lastCaptureTeam = -1;
-    gs.tableCards = []; gs.roundNum = 0; gs.lastCapture = null; this.dealRound();
+    gs.tableCards = []; gs.roundNum = 0; gs.lastMove = null; gs.lastScore = null; this.dealRound();
   },
 
   // ========== NETWORKING ==========
@@ -1246,36 +1327,35 @@ const app = {
       updates['log'] = this.moveLog.slice(-50);
       this._roomRef.update(updates).catch(err => {
         this.log('error', 'broadcastGameState write failed:', err.message);
-        this.toast('Connection issue — move may not have synced');
+        this.toast('Connection issue, the move may not have synced');
       });
     }
     this.log('debug', 'broadcast state: turn', gs.currentTurn, 'phase', gs.phase, 'deck', gs.deck.length);
 
-    // Update host's local hand (renderGame will override with controlled player if possessing)
-    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : 0;
-    this.myHand = gs.hands[activeId] || [];
+    this.myHand = gs.hands[this.activeId()] || [];
     this.renderGame();
   },
 
   buildPublicState() {
     const gs = this.gameState;
     return {
-      yourId: this.myPlayerId,
-      phase: gs.phase, numPlayers: gs.numPlayers,
-      players: gs.players.map(p => ({ id: p.id, name: p.name, team: p.team })),
+      phase: gs.phase, numPlayers: gs.numPlayers, gameToken: gs.gameToken,
+      players: gs.players.map(p => ({ id: p.id, name: p.name, team: p.team, isBot: !!p.isBot })),
       tableCards: [...gs.tableCards], deckCount: gs.deck.length,
       currentTurn: gs.currentTurn, dealerIndex: gs.dealerIndex,
       roundNum: gs.roundNum, totalRounds: gs.totalRounds,
       lastCaptureTeam: gs.lastCaptureTeam, shkobbaCount: [...gs.shkobbaCount],
       capturedCounts: gs.capturedTeams.map(t => t.length),
-      scores: [...gs.scores], forceCapture: gs.forceCapture, winScore: gs.winScore,
+      scores: [...gs.scores], forceCapture: gs.forceCapture, captureAssist: !!gs.captureAssist, winScore: gs.winScore,
       cardsPlayedThisRound: [...gs.cardsPlayedThisRound],
       lastScore: gs.lastScore || null, shkobbaThisTurn: gs.shkobbaThisTurn || false,
       winner: gs.winner !== undefined ? gs.winner : -1,
+      endReason: gs.endReason || null,
       turnTimerDuration: gs.turnTimerDuration || 0,
       nextDealerTurn: gs.nextDealerTurn !== undefined ? gs.nextDealerTurn : -1,
       diamondOwnership: this.getDiamondOwnership(),
-      lastCapture: gs.lastCapture || null,
+      lastMove: gs.lastMove || null, moveSeq: gs.moveSeq || 0,
+      look: gs.look || Look.get(),
       frozen: this._gameFrozen || false,
     };
   },
@@ -1286,21 +1366,19 @@ const app = {
     const ownership = {};
     for (let t = 0; t < 2; t++) {
       for (const card of (gs.capturedTeams[t] || [])) {
-        if (card.suit === DIAMONDS) {
-          ownership[card.name] = t;
-        }
+        if (card.suit === DIAMONDS) ownership[card.name] = t;
       }
     }
     return ownership;
   },
 
-  // ========== PLAYER STATE HANDLER ==========
+  // ========== PLAYER STATE HANDLER (guests) ==========
   handleStateUpdate(data) {
     const oldState = this.gameState;
-    const oldHandLength = this.myHand ? this.myHand.length : 0;
+    const turnChanged = !oldState || oldState.currentTurn !== data.currentTurn || (oldState.moveSeq || 0) !== (data.moveSeq || 0) || oldState.gameToken !== data.gameToken;
 
     this.gameState = {
-      phase: data.phase, numPlayers: data.numPlayers || 4,
+      phase: data.phase, numPlayers: data.numPlayers || 2, gameToken: data.gameToken || 0,
       players: data.players || [],
       tableCards: data.tableCards || [],
       deckCount: data.deckCount || 0,
@@ -1313,62 +1391,57 @@ const app = {
       capturedCounts: data.capturedCounts || [0, 0],
       scores: data.scores || [0, 0],
       forceCapture: data.forceCapture !== undefined ? data.forceCapture : true,
+      captureAssist: !!data.captureAssist,
       winScore: data.winScore || 21,
       cardsPlayedThisRound: data.cardsPlayedThisRound || [],
       lastScore: data.lastScore || null,
       shkobbaThisTurn: data.shkobbaThisTurn || false,
       winner: data.winner !== undefined ? data.winner : -1,
+      endReason: data.endReason || null,
       turnTimerDuration: data.turnTimerDuration || 0,
       nextDealerTurn: data.nextDealerTurn !== -1 ? data.nextDealerTurn : undefined,
       diamondOwnership: data.diamondOwnership || {},
-      lastCapture: data.lastCapture || null,
+      lastMove: data.lastMove ? { ...data.lastMove, taken: data.lastMove.taken || [] } : null,
+      moveSeq: data.moveSeq || 0,
+      look: data.look || null,
       frozen: data.frozen || false,
     };
+    if (this.gameState.look) Look.setLook(this.gameState.look, false);
 
-    this.selectedCardIndex = -1;
-    this.selectedCaptureIndices = [];
-    this.availableCaptures = [];
-
-    // Trigger deal animation when hand count changes
-    if (this.myHand && this.myHand.length > 0 && (oldHandLength === 0 || (oldState && oldState.roundNum !== data.roundNum))) {
-      this.animateDeal = true;
+    if (turnChanged) {
+      this.isSubmittingMove = false;
+      this.selectedCardIndex = -1;
+      this.selectedCaptureIndices = [];
+      this.availableCaptures = [];
     }
 
-    // Play sounds based on state transitions
-    if (oldState && oldState.phase === 'playing') {
-      if (data.phase === 'finished') {
-        this.playSound('win');
-      } else if (data.shkobbaThisTurn) {
-        this.playSound('shkobba');
-      }
-    }
+    if (oldState && oldState.phase === 'playing' && data.phase === 'finished') this.playSound('win');
 
-    if (data.phase === 'finished' || data.phase === 'round_end') {
-      this.renderGame();
-      this.showScoreboard();
-    } else {
-      const modal = document.getElementById('score-modal');
-      if (modal) modal.classList.add('hidden');
-      this.renderGame();
-      if (data.phase === 'playing' && data.currentTurn >= 0) {
-        this.startTurnTimer();
-      }
-    }
+    this.renderGame();
+    if (data.phase === 'playing' && data.currentTurn >= 0) this.startTurnTimer();
+    else this.stopTurnTimer();
   },
 
-  // ========== PLAYER ACTIONS ==========
-  onCardClick(index) {
-    const gs = this.gameState;
-    if (gs && gs.frozen && !this.isHost) { this.toast('Game is paused by host'); return; }
-    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== activeId || this.isSubmittingMove) return;
+  // The seat this browser is playing: normally mine, or the seat the host is
+  // possessing from the debug panel.
+  activeId() { return this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId; },
 
+  // ========== PLAYER ACTIONS ==========
+  canAct() {
+    const gs = this.gameState;
+    if (!gs) return false;
+    if (gs.frozen && !this.isHost) { this.toast('The host paused the game'); return false; }
+    return gs.phase === 'playing' && gs.currentTurn === this.activeId() && !this.isSubmittingMove && !this._animating;
+  },
+
+  onCardClick(index) {
+    if (!this.canAct()) return;
+    const gs = this.gameState;
     this.playSound('click');
 
-    // Double tap detection (300ms window)
+    // double tap places the card
     const now = Date.now();
-    const DOUBLE_TAP_DELAY = 300;
-    if (this._lastCardClickIndex === index && (now - this._lastCardClickTime) < DOUBLE_TAP_DELAY) {
+    if (this._lastCardClickIndex === index && (now - this._lastCardClickTime) < 300) {
       this._lastCardClickIndex = -1;
       this._lastCardClickTime = 0;
       this.onCardDblClick(index);
@@ -1378,141 +1451,110 @@ const app = {
     this._lastCardClickTime = now;
 
     if (this.selectedCardIndex === index) { this.cancelSelection(); return; }
-    this.selectedCardIndex = index;
     const card = this.myHand[index];
     if (!card) return;
+    this.selectedCardIndex = index;
     this.selectedCaptureIndices = [];
     this.availableCaptures = findCaptureCombinations(gs.tableCards, card.value);
-    this.renderGame();
+    // assist: a single possible take is picked for you; without it you pick every card
+    if (gs.captureAssist && this.availableCaptures.length === 1) {
+      this.selectedCaptureIndices = this.availableCaptures[0].map((i) => gs.tableCards[i].id);
+    }
+    this.refreshSelection();
   },
 
   onCardDblClick(index) {
+    if (!this.canAct()) return;
     const gs = this.gameState;
-    if (gs && gs.frozen && !this.isHost) return;
-    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== activeId || this.isSubmittingMove) return;
     this.selectedCardIndex = index;
     const card = this.myHand[index];
     if (!card) return;
     this.selectedCaptureIndices = [];
     this.availableCaptures = findCaptureCombinations(gs.tableCards, card.value);
-    if (gs.forceCapture && gs.tableCards.length > 0) {
-      if (hasDirectMatch(this.myHand, gs.tableCards)) {
-        this.toast('Must capture the matching card!');
-        return;
-      }
-    }
+    this.refreshSelection();
     this.placeCard();
   },
 
   onTableCardClick(index) {
+    if (!this.canAct() || this.selectedCardIndex === -1) return;
     const gs = this.gameState;
-    if (gs && gs.frozen && !this.isHost) return;
-    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== activeId || this.selectedCardIndex === -1 || this.isSubmittingMove) return;
+    const card = gs.tableCards[index];
+    if (!card) return;
+    // with assist only cards that belong to some take are clickable
+    if (gs.captureAssist && !this.availableCaptures.some((c) => c.includes(index))) return;
     this.playSound('click');
-    const cardId = gs.tableCards[index].id;
-    const idx = this.selectedCaptureIndices.indexOf(cardId);
+    const idx = this.selectedCaptureIndices.indexOf(card.id);
     if (idx >= 0) this.selectedCaptureIndices.splice(idx, 1);
-    else this.selectedCaptureIndices.push(cardId);
-    this.renderGame();
+    else this.selectedCaptureIndices.push(card.id);
+    this.refreshSelection();
   },
 
-  // Cards are role="button" divs; let Enter/Space activate them so the game is playable
-  // without a pointer.
   onCardKeydown(event, zone, index) {
+    if (event.key === 'i' && zone === 'hand' && this.myHand[index]) { this.showInfo(this.myHand[index], true); return; }
     if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
     event.preventDefault();
     if (zone === 'hand') this.onCardClick(index);
     else this.onTableCardClick(index);
   },
 
-  // Fallback when a card image is missing/renamed: show the rank+suit text instead of a
-  // blank box, so a single bad filename (e.g. a custom deck) doesn't silently break.
-  onCardImgError(img) {
-    if (img.dataset.fallback) return;
-    img.dataset.fallback = '1';
-    img.style.display = 'none';
-    const parent = img.parentElement;
-    if (!parent || parent.querySelector('.card-fallback')) return;
-    const span = document.createElement('span');
-    span.className = 'card-fallback';
-    span.textContent = img.getAttribute('alt') || '?';
-    parent.appendChild(span);
-  },
-
   placeCard() {
     const gs = this.gameState;
-    if (this.selectedCardIndex === -1) return;
-    if (gs.forceCapture && gs.tableCards.length > 0) {
-      if (hasDirectMatch(this.myHand, gs.tableCards)) {
-        this.toast('You must capture the matching card!'); return;
-      }
+    if (this.selectedCardIndex === -1 || !gs) return;
+    if (gs.forceCapture && gs.tableCards.length > 0 && hasDirectMatch(this.myHand, gs.tableCards)) {
+      this.toast('A matching card is on the table: you must take it'); return;
     }
     const card = this.myHand[this.selectedCardIndex];
+    if (!card) return;
     this.sendMove(card.id, []);
   },
 
   confirmCapture() {
-    if (this.selectedCardIndex === -1) { this.toast('Select a card from your hand first'); return; }
-    if (this.selectedCaptureIndices.length === 0) { this.toast('Select cards to capture'); return; }
+    if (this.selectedCardIndex === -1) { this.toast('Pick a card from your hand first'); return; }
+    if (this.selectedCaptureIndices.length === 0) { this.toast('Pick the table cards to take'); return; }
     const card = this.myHand[this.selectedCardIndex];
     const gs = this.gameState;
+    if (!card || !gs) return;
     const sum = this.selectedCaptureIndices.reduce((s, id) => {
       const c = gs.tableCards.find(tc => tc.id === id);
       return s + (c ? c.value : 0);
     }, 0);
-    if (sum !== card.value) { this.toast('Cards must sum to ' + card.value); return; }
-    this.sendMove(card.id, this.selectedCaptureIndices);
+    if (sum !== card.value) { this.toast('Those cards must add up to ' + card.value); return; }
+    this.sendMove(card.id, this.selectedCaptureIndices.slice());
   },
 
-  cancelSelection() {
+  cancelSelection(repaint) {
     this.selectedCardIndex = -1;
     this.selectedCaptureIndices = [];
     this.availableCaptures = [];
-    this.renderGame();
+    if (repaint !== false) this.refreshSelection();
   },
 
   sendMove(cardId, captureCardIds) {
     if (this.isSubmittingMove) return;
     this.isSubmittingMove = true;
-
-    const executeSend = () => {
-      if (this.isHost) {
-        const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-        this.log('debug', 'sending move (host, direct)', { playerId: activeId, cardId, captureCardIds });
-        this.handlePlay({ playerId: activeId, cardId, captureCardIds });
-        if (this.isSubmittingMove) {
-          this.isSubmittingMove = false;
-          this.cancelSelection();
-        }
-      } else if (this._roomRef) {
-        this.log('debug', 'sending move (push to Firebase)', { cardId, captureCardIds });
-        this._roomRef.child('moves').push({
-          playerId: this.myPlayerId,
-          cardId,
-          captureCardIds,
-          ts: Date.now(),
-        }).catch(err => {
-          this.log('error', 'move push failed:', err.message);
-          this.toast('Could not send move — check your connection');
-          this.isSubmittingMove = false;
-        });
-        this.cancelSelection();
-      }
-    };
-
-    if (this.animationsEnabled) {
-      const cards = document.querySelectorAll('#hand-cards .card');
-      const idx = this.selectedCardIndex;
-      if (idx >= 0 && cards[idx]) {
-        cards[idx].style.transition = 'all 0.25s var(--ease-out)';
-        cards[idx].style.transform = 'translateY(-100px) scale(0.8)';
-        cards[idx].style.opacity = '0';
-      }
-      setTimeout(executeSend, 250);
-    } else {
-      executeSend();
+    this.refreshSelection();
+    if (this.isHost) {
+      this.log('debug', 'sending move (host, direct)', { playerId: this.activeId(), cardId, captureCardIds });
+      this.handlePlay({ playerId: this.activeId(), cardId, captureCardIds });
+      // a rejected move leaves the flag set: release it so the player can try again
+      this.isSubmittingMove = false;
+      this.refreshSelection();
+    } else if (this._roomRef) {
+      this.log('debug', 'sending move (push to Firebase)', { cardId, captureCardIds });
+      this._roomRef.child('moves').push({
+        playerId: this.myPlayerId,
+        cardId,
+        captureCardIds,
+        ts: Date.now(),
+      }).catch(err => {
+        this.log('error', 'move push failed:', err.message);
+        this.toast('Could not send the move, check your connection');
+        this.isSubmittingMove = false;
+        this.refreshSelection();
+      });
+      // the host answers with a state update; if it rejects silently, unlock after a while
+      clearTimeout(this._submitGuard);
+      this._submitGuard = setTimeout(() => { if (this.isSubmittingMove) { this.isSubmittingMove = false; this.refreshSelection(); } }, 4000);
     }
   },
 
@@ -1524,38 +1566,307 @@ const app = {
     if (this.moveLog.length > 100) this.moveLog.shift();
   },
 
-  // ========== RENDER ==========
+  // ========== RENDER PIPELINE ==========
+  // renderGame() is called from everywhere the state changes, often several times in
+  // a row. It only marks the board dirty; the pump diffs what is on screen against the
+  // current state, plays the choreography for the difference on the old DOM, then
+  // paints. Pending renders collapse to the latest state.
   renderGame() {
-    this.isSubmittingMove = false;
+    this._renderQueued = true;
+    this._pump();
+  },
+
+  async _pump() {
+    if (this._animating) return;
+    this._animating = true;
+    try {
+      while (this._renderQueued) {
+        this._renderQueued = false;
+        if (!this.gameState) break;
+        try { await this._renderStep(); } catch (e) { this.log('error', 'render step failed:', e); this._paint(); }
+      }
+    } finally {
+      this._animating = false;
+      const rs = this._idleResolvers; this._idleResolvers = [];
+      rs.forEach((r) => r());
+      // something may have queued while the resolvers ran
+      if (this._renderQueued && this.gameState) this._pump();
+    }
+  },
+
+  _snapshot(gs) {
+    return {
+      gameToken: gs.gameToken, phase: gs.phase, roundNum: gs.roundNum, moveSeq: gs.moveSeq || 0,
+      currentTurn: gs.currentTurn, tableIds: gs.tableCards.map((c) => c.id), handIds: (this.myHand || []).map((c) => c.id),
+      deckCount: gs.deck ? gs.deck.length : (gs.deckCount || 0),
+    };
+  },
+
+  async _renderStep() {
     const gs = this.gameState;
-    if (!gs) return;
-    if (this.isHost && gs.hands) {
-      const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-      this.myHand = gs.hands[activeId] || [];
+    if (this.isHost && gs.hands) this.myHand = gs.hands[this.activeId()] || [];
+    this.showScreen('screen-game');
+    const prev = this._shown;
+    const cur = this._snapshot(gs);
+    const anim = Look.prefs.animations && document.documentElement.dataset.screen === 'game';
+    const sameGame = prev && prev.gameToken === cur.gameToken;
+
+    const mv = gs.lastMove;
+    if (anim && sameGame && mv && prev.moveSeq !== mv.seq) {
+      await this._animateMove(prev, gs, mv);
     }
 
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('game-view').classList.add('active');
+    // a fresh game deals the table too; a new hand deals only hands; a new deck (roundNum
+    // back to 0 in the same game) deals both again
+    const fresh = !sameGame;
+    const newDeck = sameGame && cur.roundNum === 0 && prev.roundNum !== 0;
+    const newHand = sameGame && cur.roundNum !== prev.roundNum;
+    const handBack = sameGame && prev.handIds.length === 0 && cur.handIds.length > 0;
+    if (fresh || newDeck) this._pendingDealTable = true;
+    let deal = false;
+    if ((fresh || newDeck || newHand || handBack) && cur.phase === 'playing') {
+      if (cur.handIds.length > 0) deal = true;
+      // the guest's hand arrives as a separate event: keep the intent until it lands
+    }
+    this._paint();
+    this._shown = this._snapshot(this.gameState);
+    if (deal) {
+      const withTable = this._pendingDealTable;
+      this._pendingDealTable = false;
+      if (anim) await this._animateDeal(this.gameState, withTable);
+    }
+    this._afterPaint();
+  },
 
-    try { this.renderHeader(); } catch (e) { this.log('error', 'renderHeader:', e.message); }
-    try { this.renderOpponents(); } catch (e) { this.log('error', 'renderOpponents:', e.message); }
-    try { this.renderTable(); } catch (e) { this.log('error', 'renderTable:', e.message); }
-    try { this.renderHand(); } catch (e) { this.log('error', 'renderHand:', e.message); }
+  _paint() {
+    const gs = this.gameState;
+    if (!gs) return;
+    try { this.renderHud(gs); } catch (e) { this.log('error', 'renderHud:', e.message); }
+    try { this.renderOpponents(gs); } catch (e) { this.log('error', 'renderOpponents:', e.message); }
+    try { this.renderDeck(gs); } catch (e) { this.log('error', 'renderDeck:', e.message); }
+    try { this.renderTable(gs); } catch (e) { this.log('error', 'renderTable:', e.message); }
+    try { this.renderHand(gs); } catch (e) { this.log('error', 'renderHand:', e.message); }
+    try { this.renderCaptured(gs); } catch (e) { this.log('error', 'renderCaptured:', e.message); }
+    try { this.refreshSelection(); } catch (e) { this.log('error', 'refreshSelection:', e.message); }
+    try { this.renderBanners(gs); } catch (e) { this.log('error', 'renderBanners:', e.message); }
     try { this.updateDebugPanel(); } catch (e) { /* silent */ }
-    try { if (this.controlsOpen) this.renderControlsContent(); } catch (e) { /* silent */ }
+    try { if (this.menuOpen) this.renderMenuContent(); } catch (e) { /* silent */ }
+  },
 
-    // Freeze banner for non-host
+  // Overlays that depend on the phase, run after the board is painted so the
+  // ceremony sits on the final table.
+  _afterPaint() {
+    const gs = this.gameState;
+    if (!gs) return;
+    if (gs.phase === 'round_end') this.showRoundEnd(gs);
+    else if (gs.phase === 'finished') this.showMatchEnd(gs);
+    else {
+      if (document.getElementById('ov-ceremony').classList.contains('open')) { this.closeOverlay('ov-ceremony'); this._ceremonyContinue = null; }
+      if (document.getElementById('ov-match').classList.contains('open')) this.closeOverlay('ov-match');
+    }
+  },
+
+  // ---- HUD ----
+  renderHud(gs) {
+    const $ = (id) => document.getElementById(id);
+    const t = (key) => I18N.text(key);
+    const teamName = (i) => gs.numPlayers === 4 ? `${t('team')} ${i + 1}` : (gs.players[i] ? gs.players[i].name : `${t('team')} ${i + 1}`);
+    $('hud-round').textContent = `${gs.roundNum + 1}/${gs.totalRounds}`;
+    $('hud-deck').textContent = gs.deck ? gs.deck.length : (gs.deckCount || 0);
+    $('hud-t1').textContent = gs.scores[0]; $('hud-t2').textContent = gs.scores[1];
+    $('hud-t1-shk').textContent = gs.shkobbaCount[0] ? `+${gs.shkobbaCount[0]} ${t('chkobba')}` : '';
+    $('hud-t2-shk').textContent = gs.shkobbaCount[1] ? `+${gs.shkobbaCount[1]} ${t('chkobba')}` : '';
+    $('hud-t1-name').textContent = teamName(0);
+    $('hud-t2-name').textContent = teamName(1);
+    $('lbl-round').textContent = t('round'); $('lbl-deck').textContent = t('deck');
+    this.renderTurnLabel(gs);
+  },
+
+  renderTurnLabel(gs) {
+    const el = document.getElementById('turn-fill');
+    el.classList.remove('chip', 'green', 'mult', 'text', 'urgent', 'rtl');
+    el.classList.toggle('rtl', !!I18N.term('yourTurn').rtl);
+    if (this.isHost && this._gameFrozen || gs.frozen) { el.textContent = I18N.text('paused'); el.classList.add('mult'); Juice.fill(el, 1); return; }
+    if (gs.phase === 'round_end') { el.textContent = I18N.text('roundEnd'); el.classList.add('text'); Juice.fill(el, 1); return; }
+    if (gs.phase === 'finished') { el.textContent = I18N.text('gameOver'); el.classList.add('text'); Juice.fill(el, 1); return; }
+    if (gs.phase !== 'playing') { el.textContent = ''; return; }
+    if (gs.currentTurn < 0) { el.textContent = I18N.text('dealing'); el.classList.add('text'); Juice.fill(el, 0); return; }
+    if (gs.currentTurn === this.activeId()) { el.textContent = I18N.text('yourTurn'); return; }
+    const p = gs.players[gs.currentTurn];
+    el.textContent = `${p ? p.name.toUpperCase() : '?'} ${I18N.text('thinking')}`;
+    el.classList.add('chip');
+  },
+
+  // ---- opponents: a count of backs, never a card ----
+  opponentNode(player, gs, side) {
+    const isTurn = gs.currentTurn === player.id;
+    const cap = gs.capturedCounts ? gs.capturedCounts[player.team] : (gs.capturedTeams ? gs.capturedTeams[player.team].length : 0);
+    const shk = gs.shkobbaCount[player.team] || 0;
+    const played = gs.cardsPlayedThisRound ? (gs.cardsPlayedThisRound[player.id] || 0) : 0;
+    const n = gs.phase === 'playing' ? Math.max(0, Math.min(3, 3 - played)) : 0;
+    const isBot = !!player.isBot || (this.isHost && this.isBotPlayer(player.id));
+    const isControlled = this.isHost && this._controllingPlayerId === player.id;
+    const el = document.createElement('div');
+    el.className = `opp t${player.team + 1}${isTurn ? ' active-turn' : ''}${side ? ' side' : ''}${isControlled ? ' controlled' : ''}`;
+    el.dataset.player = player.id;
+    el.innerHTML = `<div class="av">${isBot ? 'BOT' : escapeHtml(player.name.charAt(0).toUpperCase())}</div>
+      <div class="meta"><div class="name">${escapeHtml(player.name)}${isControlled ? ' <span class="ctrl">CTRL</span>' : ''}</div>
+        <div class="backs" aria-label="${n} cards in hand"></div>
+        <div class="cap">${I18N.text('karta')} <b>${cap}</b>${shk ? ` <span class="badge haya">+${shk}</span>` : ''}</div></div>`;
+    const backs = el.querySelector('.backs');
+    for (let i = 0; i < n; i++) backs.appendChild(Cards.back(true));
+    // spy mode is a host-only debug tool; it reads the host's own authoritative state
+    if (this._spyMode && this.isHost && gs.hands && gs.hands[player.id] && gs.hands[player.id].length) {
+      const spy = document.createElement('div'); spy.className = 'spy';
+      spy.innerHTML = gs.hands[player.id].map((c) => `<span>${c.display}${SUIT_SYMBOLS[c.suit] || ''}</span>`).join('');
+      el.querySelector('.meta').appendChild(spy);
+    }
+    return el;
+  },
+
+  renderOpponents(gs) {
+    const top = document.getElementById('opponents-top'), left = document.getElementById('opponent-left'), right = document.getElementById('opponent-right');
+    top.innerHTML = ''; left.innerHTML = ''; right.innerHTML = '';
+    if (!gs.players || !gs.players.length) return;
+    const me = this.myPlayerId;
+    if (gs.numPlayers === 2) {
+      const opp = gs.players[1 - me];
+      if (opp) top.appendChild(this.opponentNode(opp, gs));
+      return;
+    }
+    const at = (k) => gs.players[(me + k) % 4];
+    if (at(2)) top.appendChild(this.opponentNode(at(2), gs));
+    if (at(3)) left.appendChild(this.opponentNode(at(3), gs, true));
+    if (at(1)) right.appendChild(this.opponentNode(at(1), gs, true));
+  },
+
+  renderDeck(gs) {
+    const el = document.getElementById('table-deck'); el.innerHTML = '';
+    const count = gs.deck ? gs.deck.length : (gs.deckCount || 0);
+    const n = Math.min(3, Math.ceil(count / 14));
+    for (let i = 0; i < Math.max(1, n); i++) el.appendChild(Cards.back());
+    if (!count) el.firstChild.style.opacity = '.25';
+    const c = document.createElement('span'); c.className = 'deck-count'; c.textContent = `${I18N.text('deck')} ${count}`; el.appendChild(c);
+  },
+
+  renderTable(gs) {
+    const el = document.getElementById('table-cards'); el.innerHTML = '';
+    (gs.tableCards || []).forEach((card, i) => {
+      const node = Cards.build(card, { interactive: false, idle: true });
+      node.dataset.index = i; node.classList.add('on-table');
+      node.addEventListener('click', () => this.onTableCardClick(i));
+      node.addEventListener('keydown', (e) => this.onCardKeydown(e, 'table', i));
+      this.bindInfo(node, card, false);
+      el.appendChild(node);
+    });
+    document.getElementById('table-msg').textContent = '';
+  },
+
+  renderHand(gs) {
+    const el = document.getElementById('hand-cards'); el.innerHTML = '';
+    const activeId = this.activeId();
+    const me = gs.players ? gs.players.find((p) => p.id === activeId) : null;
+    const mine = gs.currentTurn === activeId && gs.phase === 'playing' && !(gs.frozen && !this.isHost);
+    (this.myHand || []).forEach((card, i) => {
+      const node = Cards.build(card, { interactive: mine, idle: true });
+      node.dataset.index = i;
+      node.addEventListener('click', () => this.onCardClick(i));
+      node.addEventListener('keydown', (e) => this.onCardKeydown(e, 'hand', i));
+      this.bindInfo(node, card, true);
+      el.appendChild(node);
+    });
+    const label = document.getElementById('player-label');
+    label.innerHTML = me ? `${escapeHtml(me.name)}${gs.numPlayers === 4 ? ` <span class="badge${me.team ? ' mult' : ''}">${I18N.text('team')} ${me.team + 1}</span>` : ''}` : '';
+  },
+
+  renderCaptured(gs) {
+    const el = document.getElementById('my-captured');
+    const me = gs.players ? gs.players.find((p) => p.id === this.activeId()) : null;
+    const team = me ? me.team : 0;
+    const n = gs.capturedCounts ? gs.capturedCounts[team] : (gs.capturedTeams ? gs.capturedTeams[team].length : 0);
+    const shk = gs.shkobbaCount ? gs.shkobbaCount[team] : 0;
+    el.innerHTML = `<span>${I18N.text('karta')}</span><span class="backs"></span><b>${n}</b>${shk ? `<span class="badge haya">+${shk} ${I18N.text('chkobba')}</span>` : ''}`;
+    const backs = el.querySelector('.backs');
+    for (let i = 0; i < Math.min(5, n); i++) backs.appendChild(Cards.back(true));
+  },
+
+  // long press / right click / "i" opens the info panel. Only face-up cards get one.
+  bindInfo(node, card, inHand) {
+    let t = 0;
+    node.addEventListener('contextmenu', (e) => { e.preventDefault(); this.showInfo(card, inHand); });
+    node.addEventListener('pointerdown', () => { t = setTimeout(() => { t = 0; this.showInfo(card, inHand); }, 480); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => node.addEventListener(ev, () => { if (t) clearTimeout(t); t = 0; }));
+  },
+
+  // Selection classes, action buttons and the table hint, without rebuilding the cards.
+  refreshSelection() {
+    const gs = this.gameState;
+    const $ = (id) => document.getElementById(id);
+    const cap = $('btn-capture'), place = $('btn-place'), cancel = $('btn-cancel');
+    cap.querySelector('.fill').textContent = I18N.text('capture');
+    place.querySelector('.fill').textContent = I18N.text('place');
+    if (!gs) { cap.hidden = place.hidden = cancel.hidden = true; return; }
+    const handEls = [...$('hand-cards').children];
+    const tableEls = [...$('table-cards').children];
+    const has = this.selectedCardIndex >= 0 && !!this.myHand[this.selectedCardIndex];
+    const mine = gs.phase === 'playing' && gs.currentTurn === this.activeId();
+    const assist = !!gs.captureAssist && mine;
+
+    handEls.forEach((el, i) => {
+      el.classList.toggle('selected', has && i === this.selectedCardIndex);
+      // assist: which cards can take something right now
+      const can = assist && this.myHand[i] && findCaptureCombinations(gs.tableCards, this.myHand[i].value).length > 0;
+      el.classList.toggle('can-capture', !!can);
+    });
+    const targets = new Set(has && assist ? this.availableCaptures.flat() : []);
+    tableEls.forEach((el, i) => {
+      const card = gs.tableCards[i];
+      const picked = has && card && this.selectedCaptureIndices.includes(card.id);
+      el.classList.toggle('capture-picked', !!picked);
+      el.classList.toggle('capture-target', has && assist && targets.has(i));
+      el.classList.toggle('is-interactive', has && mine && (!assist || targets.has(i)));
+      el.setAttribute('tabindex', has && mine ? '0' : '-1');
+    });
+
+    const card = has ? this.myHand[this.selectedCardIndex] : null;
+    const sum = has ? this.selectedCaptureIndices.reduce((s, id) => { const c = gs.tableCards.find((t) => t.id === id); return s + (c ? c.value : 0); }, 0) : 0;
+    const valid = has && this.selectedCaptureIndices.length > 0 && sum === card.value;
+    const mustTake = has && gs.forceCapture && gs.tableCards.length > 0 && hasDirectMatch(this.myHand, gs.tableCards);
+    const busy = this.isSubmittingMove;
+    cap.hidden = !has || (assist && this.availableCaptures.length === 0);
+    place.hidden = !has || mustTake;
+    cancel.hidden = !has;
+    cap.disabled = !valid || busy;
+    place.disabled = busy;
+    Juice.fill(cap.querySelector('.fill'), valid ? 1 : (this.selectedCaptureIndices.length ? 0.45 : 0));
+    Juice.fill(place.querySelector('.fill'), busy ? 0.4 : 1);
+
+    const msg = $('table-msg');
+    if (!has) msg.textContent = '';
+    else if (assist) {
+      msg.textContent = this.availableCaptures.length === 0
+        ? `${card.display} takes nothing`
+        : this.availableCaptures.length === 1
+          ? `${card.display} takes ${this.availableCaptures[0].map((i) => gs.tableCards[i].display).join(' + ')}`
+          : `${this.availableCaptures.length} takes possible, pick the cards`;
+    } else {
+      msg.textContent = this.selectedCaptureIndices.length
+        ? (valid ? `${sum} = ${card.value}` : `${sum} of ${card.value}`)
+        : (mustTake ? 'a matching card is on the table' : '');
+    }
+  },
+
+  renderBanners(gs) {
     let freezeBanner = document.getElementById('freeze-banner');
     if (!freezeBanner) {
       freezeBanner = document.createElement('div');
       freezeBanner.id = 'freeze-banner';
       freezeBanner.className = 'freeze-banner hidden';
-      freezeBanner.innerHTML = '<span class="freeze-icon-inline">&#10074;&#10074;</span> Game Paused by Host';
-      document.getElementById('game-view').prepend(freezeBanner);
+      freezeBanner.innerHTML = '<span class="freeze-icon-inline">&#10074;&#10074;</span> Game paused by the host';
+      document.getElementById('screen-game').prepend(freezeBanner);
     }
     freezeBanner.classList.toggle('hidden', !(gs.frozen && !this.isHost));
 
-    // Possess banner for host
     let possessBanner = document.getElementById('possess-banner');
     if (!possessBanner) {
       possessBanner = document.createElement('div');
@@ -1570,373 +1881,310 @@ const app = {
     } else {
       possessBanner.classList.add('hidden');
     }
-
-    // Reset animateDeal after rendering
-    this.animateDeal = false;
   },
 
-  renderHeader() {
+  // ========== CHOREOGRAPHY (from the difference between two public states) ==========
+  rectOfPlayer(playerId) {
+    if (playerId === this.activeId()) return document.getElementById('hand-cards').getBoundingClientRect();
+    const el = document.querySelector(`.opp[data-player="${playerId}"] .backs`) || document.querySelector(`.opp[data-player="${playerId}"]`);
+    return el ? el.getBoundingClientRect() : document.getElementById('table-deck').getBoundingClientRect();
+  },
+  pileOfTeam(team) {
     const gs = this.gameState;
-    const deckCount = gs.deck ? gs.deck.length : (gs.deckCount || 0);
-
-    document.getElementById('round-display').textContent = `R${gs.roundNum + 1}/${gs.totalRounds}`;
-    document.getElementById('deck-display').textContent = `${deckCount} left`;
-
-    const turnEl = document.getElementById('turn-display');
-    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-    if (this.isHost && this._gameFrozen) {
-      turnEl.innerHTML = '<span class="frozen-turn">FROZEN</span>';
-    } else if (gs.phase === 'playing' && gs.currentTurn >= 0) {
-      const p = gs.players[gs.currentTurn];
-      if (gs.currentTurn === activeId) {
-        turnEl.innerHTML = '<span class="your-turn">Your Turn!</span>';
-      } else {
-        turnEl.textContent = p ? p.name + "'s turn" : '--';
-      }
-    } else if (gs.phase === 'round_end') turnEl.textContent = 'Round End';
-    else if (gs.phase === 'finished') turnEl.textContent = 'Game Over';
-    else turnEl.textContent = '--';
-
-    const t1El = document.getElementById('score-t1');
-    const t2El = document.getElementById('score-t2');
-    t1El.querySelector('.score-value').textContent = gs.scores[0];
-    t2El.querySelector('.score-value').textContent = gs.scores[1];
-
-    const shk0 = gs.shkobbaCount ? gs.shkobbaCount[0] : 0;
-    const shk1 = gs.shkobbaCount ? gs.shkobbaCount[1] : 0;
-    let shkBadge1 = t1El.querySelector('.shkobba-badge');
-    let shkBadge2 = t2El.querySelector('.shkobba-badge');
-    if (shk0 > 0) {
-      if (!shkBadge1) { shkBadge1 = document.createElement('span'); shkBadge1.className = 'shkobba-badge'; t1El.appendChild(shkBadge1); }
-      shkBadge1.textContent = `+${shk0}`;
-    } else if (shkBadge1) { shkBadge1.remove(); }
-    if (shk1 > 0) {
-      if (!shkBadge2) { shkBadge2 = document.createElement('span'); shkBadge2.className = 'shkobba-badge'; t2El.appendChild(shkBadge2); }
-      shkBadge2.textContent = `+${shk1}`;
-    } else if (shkBadge2) { shkBadge2.remove(); }
+    const me = gs.players.find((p) => p.id === this.activeId());
+    if (me && team === me.team) return document.getElementById('my-captured');
+    const p = gs.players.find((x) => x.team === team && x.id !== this.activeId());
+    return (p && document.querySelector(`.opp[data-player="${p.id}"] .cap`)) || document.getElementById('opponents-top');
   },
 
-  renderOpponents() {
-    const gs = this.gameState;
-    if (!gs || !gs.players) return;
-    const topEl = document.getElementById('opponents-top');
-    const leftEl = document.getElementById('opponent-left');
-    const rightEl = document.getElementById('opponent-right');
-    topEl.innerHTML = ''; leftEl.innerHTML = ''; rightEl.innerHTML = '';
-
-    if (gs.numPlayers === 2) {
-      const opp = gs.players[1 - this.myPlayerId];
-      topEl.innerHTML = opp ? this.opponentHtml(opp, gs) : '';
-    } else {
-      const myPos = this.myPlayerId;
-      topEl.innerHTML = this.opponentHtml(gs.players[(myPos + 2) % 4], gs);
-      leftEl.innerHTML = this.opponentHtml(gs.players[(myPos + 3) % 4], gs);
-      rightEl.innerHTML = this.opponentHtml(gs.players[(myPos + 1) % 4], gs);
-    }
-  },
-
-  opponentHtml(player, gs) {
-    if (!player) return '';
-    const isTurn = gs.currentTurn === player.id;
-    const isBot = this.isHost && this.isBotPlayer(player.id);
-    const capCount = gs.capturedCounts ? gs.capturedCounts[player.team] : (gs.capturedTeams ? gs.capturedTeams[player.team].length : 0);
-    const handCards = gs.cardsPlayedThisRound ? 3 - (gs.cardsPlayedThisRound[player.id] || 0) : 3;
-    const shkobbaCount = gs.shkobbaCount[player.team] || 0;
-
-    const handDots = handCards > 0
-      ? '<span class="hand-dots">' + '<span class="hand-dot"></span>'.repeat(handCards) + '</span>'
-      : '<span class="opp-done">done</span>';
-
-    const avatarContent = isBot ? '<span class="bot-avatar-icon">BOT</span>' : escapeHtml(player.name.charAt(0).toUpperCase());
-
-    const isControlled = this.isHost && this._controllingPlayerId === player.id;
-    let spyHtml = '';
-    if (this._spyMode && this.isHost && gs.hands && gs.hands[player.id] && gs.hands[player.id].length > 0) {
-      spyHtml = '<div class="spy-cards">' + gs.hands[player.id].map(c => {
-        const sym = SUIT_SYMBOLS[c.suit] || '';
-        return `<span class="spy-card">${c.display}${sym}</span>`;
-      }).join('') + '</div>';
-    }
-
-    return `<div class="opponent-card ${isTurn ? 'active-turn' : ''} ${isControlled ? 'controlled' : ''} team${player.team + 1}">
-      <div class="opp-avatar">${avatarContent}</div>
-      <div class="opp-details">
-        <div class="opp-name">${escapeHtml(player.name)}${isControlled ? ' <span class="ctrl-badge">CTRL</span>' : ''}</div>
-        <div class="opp-stats">
-          ${handDots}
-          <span class="opp-captured">${capCount}</span>
-          ${shkobbaCount > 0 ? `<span class="opp-shkobba">+${shkobbaCount}</span>` : ''}
-        </div>
-        ${spyHtml}
-      </div>
-    </div>`;
-  },
-
-  renderTable() {
-    const gs = this.gameState;
-    const tableEl = document.getElementById('table-cards');
-    const msgEl = document.getElementById('table-msg');
-    const hintEl = document.getElementById('capture-hint');
-    const deckEl = document.getElementById('table-deck');
-
-    if (!gs) return;
-
-    const deckCount = gs.deck ? gs.deck.length : (gs.deckCount || 0);
-    deckEl.innerHTML = deckCount > 0
-      ? `<div class="card-back"></div><span class="deck-count">${deckCount}</span>`
-      : '<span class="deck-count" style="color:var(--text-dim);">Empty</span>';
-
-    if (!gs.tableCards || gs.tableCards.length === 0) {
-      tableEl.innerHTML = '';
-      msgEl.textContent = gs.phase === 'playing' ? 'Table is empty' : '';
-      hintEl.classList.add('hidden');
-      this.updateShkobbaAnnounce(gs);
-      this.renderLastCapture(gs);
-      return;
-    }
-
-    msgEl.textContent = '';
-    tableEl.innerHTML = gs.tableCards.map((card, i) => {
-      const isSelected = this.selectedCaptureIndices.includes(card.id);
-      let cls = 'card';
-      const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-      if (gs.currentTurn === activeId && this.selectedCardIndex >= 0) cls += ' capture-target selectable';
-      if (isSelected) cls += ' selected';
-      const aria = escapeHtml(getCardAria(card));
-      return `<div class="${cls}" role="button" tabindex="0" aria-label="${aria}" onclick="app.onTableCardClick(${i})" onkeydown="app.onCardKeydown(event,'table',${i})"><img src="${getCardImage(card)}" alt="${aria}" onerror="app.onCardImgError(this)"></div>`;
-    }).join('');
-
-    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-    const showHint = this.selectedCardIndex >= 0 && gs.currentTurn === activeId;
-    hintEl.classList.toggle('hidden', !showHint);
-    if (showHint) {
-      const card = this.myHand[this.selectedCardIndex];
-      if (this.availableCaptures.length > 0) {
-        hintEl.textContent = `Select table cards that sum to ${card.display}=${card.value}`;
-      } else if (gs.forceCapture && gs.tableCards.length > 0 && hasDirectMatch(this.myHand, gs.tableCards)) {
-        hintEl.textContent = 'A matching card exists. Pick the highlighted card.';
-      } else {
-        hintEl.textContent = 'No capture possible. Click "Place".';
-      }
-    }
-
-    this.updateShkobbaAnnounce(gs);
-    this.renderLastCapture(gs);
-  },
-
-  renderLastCapture(gs) {
-    let el = document.getElementById('last-capture-info');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'last-capture-info';
-      el.className = 'last-capture-info';
-      const tableArea = document.getElementById('table-area');
-      if (tableArea) tableArea.appendChild(el);
-    }
-    const lc = gs.lastCapture;
-    if (!lc) { el.classList.add('hidden'); return; }
-    const playedImg = getCardImage(lc.playedCard);
-    const capturedHtml = lc.capturedCards.map(c =>
-      `<div class="lc-cap-card"><img src="${getCardImage(c)}" alt="${escapeHtml(c.display)}" onerror="app.onCardImgError(this)"></div>`
-    ).join('');
-    el.innerHTML = `
-      <div class="lc-label team${lc.teamIndex + 1}">${escapeHtml(lc.playerName)}</div>
-      <div class="lc-played-card"><img src="${playedImg}" alt="${escapeHtml(lc.playedCard.display)}" onerror="app.onCardImgError(this)"></div>
-      <div class="lc-arrow">&#9660;</div>
-      <div class="lc-captured-cards">${capturedHtml}</div>
-    `;
-    el.classList.remove('hidden');
-  },
-
-  updateShkobbaAnnounce(gs) {
-    const el = document.getElementById('shkobba-announce');
-    if (gs.shkobbaThisTurn) {
-      const team = gs.shkobbaCount[0] > (this._lastShkobbaCount0 || 0) ? 0 : 1;
-      el.textContent = `Shkobba! T${team + 1} +${gs.shkobbaCount[team]}`;
-      el.classList.remove('hidden');
-      if (this._shkobbaTimeout) clearTimeout(this._shkobbaTimeout);
-      this._shkobbaTimeout = setTimeout(() => { el.classList.add('hidden'); this._shkobbaTimeout = null; }, 2500);
-      this._lastShkobbaCount0 = gs.shkobbaCount[0];
-      this._lastShkobbaCount1 = gs.shkobbaCount[1];
-    } else if (!this._shkobbaTimeout) {
-      el.classList.add('hidden');
-    }
-  },
-
-  renderHand() {
-    const gs = this.gameState;
-    const handEl = document.getElementById('hand-cards');
-    const actionsEl = document.getElementById('hand-actions');
-    const labelEl = document.getElementById('player-label');
-    const capturedEl = document.getElementById('my-captured');
-
-    if (!gs) return;
-    const activeId = this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId;
-    const myPlayer = gs.players ? gs.players.find(p => p.id === activeId) : null;
-    labelEl.textContent = myPlayer ? `${escapeHtml(myPlayer.name)} (T${myPlayer.team + 1})` : 'Your Hand';
-
-    const myTeam = myPlayer ? myPlayer.team : 0;
-    const myCapturedCards = gs.capturedTeams ? gs.capturedTeams[myTeam] : [];
-    const capturedCount = gs.capturedCounts ? gs.capturedCounts[myTeam] : myCapturedCards.length;
-    const myShkobba = gs.shkobbaCount ? gs.shkobbaCount[myTeam] : 0;
-
-    if (capturedEl) {
-      if (capturedCount > 0) {
-        capturedEl.innerHTML = `<div class="my-captured-pill"><span class="cap-icon">&#9670;</span><span class="cap-count">${capturedCount}</span>${myShkobba > 0 ? `<span class="cap-shkobba">+${myShkobba}</span>` : ''}</div>`;
-        capturedEl.classList.remove('hidden');
-      } else {
-        capturedEl.classList.add('hidden');
-      }
-    }
-
-    const isMyTurn = gs.currentTurn === activeId && gs.phase === 'playing' && !(gs.frozen && !this.isHost);
-
-    if (!this.myHand || this.myHand.length === 0) {
-      handEl.innerHTML = gs.phase === 'playing' ? '<div style="color:var(--text-secondary);padding:1rem;">No cards left this round</div>' : '';
-      actionsEl.classList.add('hidden');
-      return;
-    }
-
-    const forceActive = isMyTurn && gs.forceCapture && gs.tableCards && gs.tableCards.length > 0;
-    const cardCanCapture = forceActive
-      ? this.myHand.map(c => gs.tableCards.some(tc => tc.value === c.value))
-      : null;
-    const anyCanCapture = cardCanCapture ? cardCanCapture.some(Boolean) : false;
-
-    handEl.innerHTML = this.myHand.map((card, i) => {
-      const isSelected = this.selectedCardIndex === i;
-      let cls = 'card';
-      if (isMyTurn) cls += ' selectable';
-      if (isSelected) cls += ' selected';
-      if (anyCanCapture && cardCanCapture[i]) cls += ' can-capture';
-      if (anyCanCapture && !cardCanCapture[i]) cls += ' no-capture';
-
-      const animClass = (this.animationsEnabled && this.animateDeal) ? ' deal-animate' : '';
-      const animStyle = (this.animationsEnabled && this.animateDeal) ? ` style="animation-delay: ${i * 0.12}s"` : '';
-
-      const aria = escapeHtml(getCardAria(card));
-      return `<div class="${cls}${animClass}"${animStyle} role="button" tabindex="0" aria-label="${aria}" onclick="app.onCardClick(${i})" onkeydown="app.onCardKeydown(event,'hand',${i})"><img src="${getCardImage(card)}" alt="${aria}" onerror="app.onCardImgError(this)"></div>`;
-    }).join('');
-
-    actionsEl.classList.toggle('hidden', !isMyTurn);
-  },
-
-  showScoreboard() {
-    const gs = this.gameState;
-    if (!gs) return;
-
-    this.stopTurnTimer();
-    const modal = document.getElementById('score-modal');
-    const titleEl = document.getElementById('score-title');
-    const detailsEl = document.getElementById('score-details');
-    const actionsEl = document.getElementById('score-modal-actions');
-    if (!modal) return;
-
-    const isGameOver = gs.phase === 'finished';
-    titleEl.textContent = isGameOver ? 'Game Over' : `Round ${gs.roundNum + 1} Completed`;
-
-    const cap0 = gs.capturedCounts ? gs.capturedCounts[0] : (gs.capturedTeams ? gs.capturedTeams[0].length : 0);
-    const cap1 = gs.capturedCounts ? gs.capturedCounts[1] : (gs.capturedTeams ? gs.capturedTeams[1].length : 0);
-
-    // Diamond count
-    const ownership = gs.diamondOwnership || (this.isHost ? this.getDiamondOwnership() : {});
-    let dia0 = 0, dia1 = 0;
-    Object.values(ownership).forEach(owner => {
-      if (owner === 0) dia0++;
-      else if (owner === 1) dia1++;
+  // A face-up card appears at `from` and travels to the table row; resolves with its node.
+  flyPlayedCard(card, fromRect) {
+    return new Promise((resolve) => {
+      const row = document.getElementById('table-cards');
+      const node = Cards.build(card, { interactive: false, idle: false });
+      node.classList.add('slot-hidden'); row.appendChild(node);
+      const to = node.getBoundingClientRect();
+      const ghost = Cards.build(card, { interactive: false, idle: false });
+      ghost.classList.add('flying');
+      Object.assign(ghost.style, { left: fromRect.left + fromRect.width / 2 - to.width / 2 + 'px', top: fromRect.top + 'px', width: to.width + 'px', height: to.height + 'px', transform: 'scale(.9) rotate(-8deg)' });
+      document.body.appendChild(ghost);
+      const dx = to.left - parseFloat(ghost.style.left), dy = to.top - fromRect.top;
+      const dur = 380;
+      requestAnimationFrame(() => {
+        ghost.style.transition = `transform ${dur}ms var(--spring)`;
+        ghost.style.transform = `translate(${dx}px, ${dy}px) scale(1) rotate(0deg)`;
+      });
+      setTimeout(() => { ghost.remove(); node.classList.remove('slot-hidden'); node.classList.add('landed'); Juice.thud(0.6); Juice.shake(0.25); resolve(node); }, dur + 40);
     });
+  },
 
-    let detailsHtml = '';
-
-    if (isGameOver && gs.winner >= 0 && (gs.lastScore === null || gs.lastScore === undefined)) {
-      const players = gs.players.filter(p => p.team === gs.winner).map(p => p.name).join(' & ');
-      detailsHtml = `
-        <p style="font-size:1.3rem;color:var(--gold);margin-bottom:0.5rem;">♦ ALL 10 DIAMONDS! ♦</p>
-        <p style="font-size:1.1rem;margin-bottom:1rem;">${escapeHtml(players)}</p>
-        <p style="color:var(--text-secondary);">Instant win by capturing every diamond in a single round!</p>
-        <p style="margin-top:1rem;font-size:1.15rem;color:var(--gold);">Final Score: Team 1 (${gs.scores[0]}) - Team 2 (${gs.scores[1]})</p>
-      `;
+  async _animateMove(prev, gs, mv) {
+    const wait = (ms) => Juice.wait(ms);
+    const me = mv.playerId === this.activeId();
+    const handRow = document.getElementById('hand-cards');
+    // the row still shows the previous table; a card already gone from it (state and
+    // hand arriving in the other order) is simply not animated
+    let playedEl;
+    if (me) {
+      const src = [...handRow.children].find((el) => +el.dataset.id === mv.card.id);
+      const r = src ? src.getBoundingClientRect() : handRow.getBoundingClientRect();
+      if (src) src.style.visibility = 'hidden';
+      playedEl = await this.flyPlayedCard(mv.card, r);
     } else {
-      const ls = gs.lastScore || { mostCardsPt: -1, mostDiamondsPt: -1, sevenDiamondsPt: -1 };
-
-      detailsHtml = `
-        <table class="score-table">
-          <thead>
-            <tr>
-              <th>Category</th>
-              <th>Team 1</th>
-              <th>Team 2</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Captured Cards</td>
-              <td>${cap0} cards ${ls.mostCardsPt === 0 ? '<strong style="color:var(--gold)">(+1)</strong>' : ''}</td>
-              <td>${cap1} cards ${ls.mostCardsPt === 1 ? '<strong style="color:var(--gold)">(+1)</strong>' : ''}</td>
-            </tr>
-            <tr>
-              <td>Diamonds</td>
-              <td>${dia0} diamonds ${ls.mostDiamondsPt === 0 ? '<strong style="color:var(--gold)">(+1)</strong>' : ''}</td>
-              <td>${dia1} diamonds ${ls.mostDiamondsPt === 1 ? '<strong style="color:var(--gold)">(+1)</strong>' : ''}</td>
-            </tr>
-            <tr>
-              <td>7 of Diamonds</td>
-              <td>${ls.sevenDiamondsPt === 0 ? '<strong style="color:var(--gold)">(+1)</strong>' : '0'}</td>
-              <td>${ls.sevenDiamondsPt === 1 ? '<strong style="color:var(--gold)">(+1)</strong>' : '0'}</td>
-            </tr>
-            <tr>
-              <td>Most Sevens</td>
-              <td>${ls.mostSevensPt === 0 ? '<strong style="color:var(--gold)">(+1)</strong>' : '0'}</td>
-              <td>${ls.mostSevensPt === 1 ? '<strong style="color:var(--gold)">(+1)</strong>' : '0'}</td>
-            </tr>
-            <tr>
-              <td>Shkobba Count</td>
-              <td>+${gs.shkobbaCount[0]}</td>
-              <td>+${gs.shkobbaCount[1]}</td>
-            </tr>
-            <tr class="total">
-              <td>Total Score</td>
-              <td>${gs.scores[0]}</td>
-              <td>${gs.scores[1]}</td>
-            </tr>
-          </tbody>
-        </table>
-      `;
+      playedEl = await this.flyPlayedCard(mv.card, this.rectOfPlayer(mv.playerId));
+      const backs = document.querySelector(`.opp[data-player="${mv.playerId}"] .backs`);
+      if (backs && backs.lastChild) backs.lastChild.remove();
     }
+    if (!mv.taken.length) { await wait(220); return; }
 
-    detailsEl.innerHTML = detailsHtml;
+    // each taken card lifts with a tag, the cadence accelerating
+    const rowEls = [...document.getElementById('table-cards').children];
+    const takenEls = mv.taken.map((c) => rowEls.find((el) => +el.dataset.id === c.id)).filter(Boolean);
+    const seq = [playedEl, ...takenEls];
+    let step = 0;
+    for (const el of seq) {
+      const card = el === playedEl ? mv.card : mv.taken.find((c) => c.id === +el.dataset.id);
+      el.classList.add('lifting');
+      const kind = Cards.isHaya(card) ? 'haya' : card.suit === 'diamonds' ? 'gold' : card.name === '7' ? 'mult' : 'chip';
+      const label = Cards.isHaya(card) ? I18N.text('haya') : card.suit === 'diamonds' ? I18N.text('dinari') : card.name === '7' ? I18N.text('barmila') : `+1 ${I18N.text('karta')}`;
+      Juice.tag(el, label, kind);
+      Juice.tick(step);
+      await wait(Math.max(70, 170 - step * 18));
+      step++;
+    }
+    await wait(160);
+    const pile = this.pileOfTeam(mv.teamIndex);
+    await Promise.all(seq.map((el, n) => Juice.flyTo(el, pile, n * 90, { scale: 0.32 })));
+    if (mv.chkobba) await this.chkobbaMoment(mv.teamIndex);
+    else Juice.shake(Math.min(1, 0.3 + seq.length * 0.12));
+  },
 
-    if (isGameOver) {
-      actionsEl.innerHTML = `<button class="btn btn-primary" onclick="app.rematch()" style="margin-right:0.5rem;">Rematch</button><button class="btn btn-secondary" onclick="app.backToLobby()">Back to Menu</button>`;
-    } else {
-      if (this.isHost) {
-        actionsEl.innerHTML = `<button class="btn btn-primary" onclick="app.startNextRound()">Start Next Round</button>`;
-      } else {
-        actionsEl.innerHTML = `<div style="color:var(--text-secondary);font-size:0.85rem;font-style:italic;margin-top:0.5rem;">Waiting for host to start next round...</div>`;
+  async chkobbaMoment(team) {
+    const host = document.getElementById('fx-table');
+    const t = I18N.term('chkobba');
+    const gs = this.gameState;
+    const who = gs.numPlayers === 4 ? `${I18N.text('team')} ${team + 1}` : (gs.players[team] ? gs.players[team].name : '');
+    const slamEl = Juice.slam(host, t.main, team === 0 ? 'chip' : 'mult', { sub: t.sub ? `${t.sub} · ${who}` : who, life: 1500 });
+    if (t.rtl) slamEl.style.fontFamily = 'var(--font-arabic)';
+    Juice.shake(1);
+    const fh = document.createElement('div'); fh.className = 'fire-host'; host.appendChild(fh);
+    const f = Fire.create(fh, team === 0 ? 'chip' : 'mult', { w: 120, h: 44 });
+    setTimeout(() => f.stop(), 1200);
+    await Juice.wait(1900);
+    fh.remove();
+  },
+
+  // Deal: cards fly from the deck to the table, then to each seat in turn.
+  async _animateDeal(gs, withTable) {
+    const deck = document.getElementById('table-deck');
+    const tableEls = [...document.getElementById('table-cards').children];
+    const handEls = [...document.getElementById('hand-cards').children];
+    const fillEl = document.getElementById('turn-fill');
+    if (withTable) tableEls.forEach((el) => el.classList.add('slot-hidden'));
+    handEls.forEach((el) => el.classList.add('slot-hidden'));
+    document.querySelectorAll('.opp .backs').forEach((b) => (b.style.visibility = 'hidden'));
+    fillEl.textContent = I18N.text('dealing'); fillEl.classList.add('text'); Juice.fill(fillEl, 0);
+    const jobs = [];
+    let d = 0;
+    const others = gs.players.filter((p) => p.id !== this.activeId()).length;
+    const total = (withTable ? tableEls.length : 0) + handEls.length + others * 3;
+    let done = 0;
+    const tickFill = () => { done++; Juice.fill(fillEl, done / total); };
+    if (withTable) tableEls.forEach((el) => { jobs.push(Juice.dealTo(deck, el, d, true).then(tickFill)); d += 90; });
+    const order = [];
+    for (let k = 1; k <= gs.numPlayers; k++) order.push((gs.dealerIndex + k) % gs.numPlayers);
+    for (let r = 0; r < 3; r++) for (const pid of order) {
+      if (pid === this.activeId()) { const el = handEls[r]; if (el) jobs.push(Juice.dealTo(deck, el, d, true).then(tickFill)); }
+      else {
+        const opp = document.querySelector(`.opp[data-player="${pid}"] .backs`);
+        if (opp) jobs.push(Juice.dealTo(deck, opp, d, false).then(tickFill));
       }
+      d += 90;
     }
+    await Promise.all(jobs);
+    document.querySelectorAll('.opp .backs').forEach((b) => (b.style.visibility = ''));
+    this.renderTurnLabel(this.gameState);
+  },
 
-    modal.classList.remove('hidden');
-    // Move focus into the dialog so keyboard/screen-reader users land on the action.
-    const firstBtn = actionsEl.querySelector('button');
-    if (firstBtn) firstBtn.focus();
+  // ========== ROUND END CEREMONY ==========
+  showRoundEnd(gs) {
+    const key = `${gs.gameToken}:${gs.roundNum}:${gs.scores.join('-')}`;
+    if (this._ceremonyKey === key) return;
+    this._ceremonyKey = key;
+    this.stopTurnTimer();
+    this.ceremony(gs).catch((e) => this.log('error', 'ceremony failed:', e));
+  },
+
+  tallyLines(gs) {
+    const ls = gs.lastScore || {};
+    const c = ls.counts || { cards: gs.capturedCounts || [0, 0], diamonds: [0, 0], haya: [0, 0], sevens: [0, 0], sixes: [0, 0] };
+    return [
+      { key: 'karta', values: c.cards, winner: ls.mostCardsPt !== undefined ? ls.mostCardsPt : -1 },
+      { key: 'dinari', values: c.diamonds, winner: ls.mostDiamondsPt !== undefined ? ls.mostDiamondsPt : -1 },
+      { key: 'haya', values: c.haya, winner: ls.sevenDiamondsPt !== undefined ? ls.sevenDiamondsPt : -1 },
+      { key: 'barmila', values: c.sevens, winner: ls.mostSevensPt !== undefined ? ls.mostSevensPt : -1 },
+      { key: 'chkobba', values: gs.shkobbaCount, each: true },
+    ];
+  },
+
+  async ceremony(gs) {
+    const $ = (id) => document.getElementById(id);
+    const J = Juice;
+    const lines = this.tallyLines(gs);
+    const points = [0, 0];
+    lines.forEach((l) => { if (l.each) { points[0] += l.values[0]; points[1] += l.values[1]; } else if (l.winner >= 0) points[l.winner]++; });
+    const before = [gs.scores[0] - points[0], gs.scores[1] - points[1]];
+    this._ceremonySkip = false; this._ceremonyContinue = null;
+    const teamName = (i) => gs.numPlayers === 4 ? `${I18N.text('team')} ${i + 1}` : (gs.players[i] ? gs.players[i].name : `${I18N.text('team')} ${i + 1}`);
+
+    $('cer-round').textContent = I18N.text('roundEnd');
+    $('cer-x').textContent = I18N.text('score').toLowerCase();
+    $('cer-t1').textContent = teamName(0); $('cer-t2').textContent = teamName(1);
+    const box = $('cer-lines'); box.innerHTML = '';
+    const rows = lines.map((l) => {
+      const row = document.createElement('div'); row.className = 'cer-line';
+      const t = I18N.term(l.key);
+      row.innerHTML = `<div class="cer-box t1 burnable"><span class="n">0</span><span class="pt">+1</span></div>
+        <div class="fill text ${t.rtl ? 'rtl' : ''}">${t.main}</div>
+        <div class="cer-box t2 burnable"><span class="n">0</span><span class="pt">+1</span></div>`;
+      J.fill(row.querySelector('.fill'), 0);
+      box.appendChild(row);
+      return row;
+    });
+    const tot1 = $('cer-tot1'), tot2 = $('cer-tot2');
+    tot1.textContent = before[0]; tot2.textContent = before[1];
+    tot1.classList.remove('win'); tot2.classList.remove('win');
+    $('cer-skip').textContent = 'tap to skip'; $('cer-skip').classList.remove('waiting');
+    this.openOverlay('ov-ceremony');
+
+    const finishLine = (row, l) => {
+      row.classList.add('on'); J.fill(row.querySelector('.fill'), 1);
+      const boxes = row.querySelectorAll('.cer-box');
+      boxes[0].querySelector('.n').textContent = l.values[0]; boxes[1].querySelector('.n').textContent = l.values[1];
+      if (l.each) { if (l.values[0]) boxes[0].classList.add('win'); if (l.values[1]) boxes[1].classList.add('win'); boxes.forEach((b, i) => (b.querySelector('.pt').textContent = `+${l.values[i]}`)); }
+      else if (l.winner >= 0) boxes[l.winner].classList.add('win');
+    };
+    const cancel = () => this._ceremonySkip;
+    const stillOpen = () => this._ceremonyKey && $('ov-ceremony').classList.contains('open') && this.gameState === gs;
+
+    if (J.getJuice() <= 0) {
+      lines.forEach((l, i) => finishLine(rows[i], l));
+    } else {
+      for (let i = 0; i < lines.length; i++) {
+        if (this._ceremonySkip || !stillOpen()) break;
+        const l = lines[i], row = rows[i];
+        row.classList.add('on');
+        const boxes = row.querySelectorAll('.cer-box');
+        await Promise.all([0, 1].map((t) => J.countUp(boxes[t].querySelector('.n'), 0, l.values[t], { base: 120, cancel, delay: t * 40 })));
+        J.fill(row.querySelector('.fill'), 1);
+        if (this._ceremonySkip) break;
+        const winners = l.each ? [0, 1].filter((t) => l.values[t] > 0) : l.winner >= 0 ? [l.winner] : [];
+        winners.forEach((t) => {
+          boxes[t].classList.add('win');
+          boxes[t].querySelector('.pt').textContent = l.each ? `+${l.values[t]}` : '+1';
+          const f = Fire.create(boxes[t], t === 0 ? 'chip' : 'mult', { w: 40, h: 22 }); setTimeout(() => f.stop(), 500);
+        });
+        if (winners.length) { J.thud(0.8); J.shake(0.4, $('ov-ceremony').querySelector('.frame')); } else J.tick(0);
+        await J.wait(420);
+      }
+      lines.forEach((l, i) => finishLine(rows[i], l));
+    }
+    if (!stillOpen()) return;
+    await Promise.all([J.countUp(tot1, before[0], gs.scores[0], { base: 160, cancel, instant: this._ceremonySkip }), J.countUp(tot2, before[1], gs.scores[1], { base: 160, cancel, instant: this._ceremonySkip })]);
+    tot1.textContent = gs.scores[0]; tot2.textContent = gs.scores[1];
+    const lead = gs.scores[0] === gs.scores[1] ? -1 : gs.scores[0] > gs.scores[1] ? 0 : 1;
+    if (lead >= 0 && J.getJuice() > 0) { (lead === 0 ? tot1 : tot2).classList.add('win'); const f = Fire.create(lead === 0 ? tot1 : tot2, lead === 0 ? 'chip' : 'mult', { w: 56, h: 30 }); setTimeout(() => f.stop(), 900); }
+    else if (lead >= 0) (lead === 0 ? tot1 : tot2).classList.add('win');
+    J.boom(); J.shake(0.8, $('ov-ceremony').querySelector('.frame'));
+    if (!stillOpen()) return;
+    if (this.isHost) {
+      $('cer-skip').textContent = 'tap to continue';
+      this._ceremonyContinue = () => this.startNextRound();
+    } else {
+      $('cer-skip').textContent = 'waiting for the host'; $('cer-skip').classList.add('waiting');
+    }
   },
 
   startNextRound() {
     if (!this.isHost) return;
-    const modal = document.getElementById('score-modal');
-    if (modal) modal.classList.add('hidden');
+    this._ceremonyContinue = null;
+    this.closeOverlay('ov-ceremony');
     this.checkWinCondition();
   },
 
+  // ========== MATCH END ==========
+  showMatchEnd(gs) {
+    const key = `${gs.gameToken}:finished:${gs.winner}`;
+    if (this._matchKey === key) return;
+    this._matchKey = key;
+    this.stopTurnTimer();
+    // a match that ends straight out of a tally leaves the ceremony open underneath
+    this._ceremonyContinue = null; this.closeOverlay('ov-ceremony');
+    const $ = (id) => document.getElementById(id);
+    const w = gs.winner >= 0 ? gs.winner : (gs.scores[0] > gs.scores[1] ? 0 : 1);
+    const name = gs.numPlayers === 4 ? `${I18N.text('team')} ${w + 1}` : (gs.players[w] ? gs.players[w].name : `${I18N.text('team')} ${w + 1}`);
+    $('match-title').innerHTML = `${escapeHtml(name)} <span class="term"><b>${I18N.text('wins')}</b></span>`;
+    const sub = $('match-sub');
+    if (gs.endReason === 'diamonds') { sub.textContent = 'all ten diamonds in one deal'; sub.hidden = false; }
+    else if (gs.endReason === 'surrender') { sub.textContent = 'the other side surrendered'; sub.hidden = false; }
+    else sub.hidden = true;
+    $('match-score').innerHTML = `<span style="color:var(--team1)">${gs.scores[0]}</span> <span style="color:var(--text-dim);font-size:.5em">x</span> <span style="color:var(--team2)">${gs.scores[1]}</span>`;
+    $('match-again').hidden = !this.isHost;
+    this.openOverlay('ov-match');
+    Juice.chime();
+    const c = $('confetti'); c.innerHTML = '';
+    if (Juice.getJuice() > 0) for (let i = 0; i < 70; i++) { const d = document.createElement('i'); d.style.left = Math.random() * 100 + '%'; d.style.background = ['var(--gold)', 'var(--chip)', 'var(--mult)', 'var(--text)'][i % 4]; d.style.animationDelay = Math.random() * .8 + 's'; d.style.animationDuration = 2 + Math.random() * 1.5 + 's'; c.appendChild(d); }
+  },
+
+  // kept for the debug panel, which still calls it after forcing a winner
+  showScoreboard() { this._ceremonyKey = ''; this._matchKey = ''; this._afterPaint(); },
+  _closeEndOverlays() { this._ceremonyContinue = null; this.closeOverlay('ov-ceremony'); this.closeOverlay('ov-match'); },
+
+  // ========== CARD INFO + RULES ==========
+  showInfo(card, inHand) {
+    const $ = (id) => document.getElementById(id);
+    const box = $('info-card'); box.innerHTML = '';
+    const node = Cards.build(card, { interactive: true, idle: true }); node.classList.add('big'); box.appendChild(node);
+    const isHaya = Cards.isHaya(card);
+    const suitName = Cards.getSuit() === 'coin' ? { hearts: 'of cups', diamonds: 'of coins', clubs: 'of batons', spades: 'of swords' }[card.suit] : 'of ' + card.suit;
+    $('info-title').innerHTML = isHaya ? I18N.html('haya') : `<span class="term"><b>${card.display} ${suitName}</b></span>`;
+    const counts = [];
+    counts.push(`<li><span class="badge">+1</span> ${I18N.text('karta')}: counts toward most cards</li>`);
+    if (card.suit === 'diamonds') counts.push(`<li><span class="badge gold">+1</span> ${I18N.text('dinari')}: counts toward most diamonds</li>`);
+    if (card.name === '7') counts.push(`<li><span class="badge mult">7</span> ${I18N.text('barmila')}: counts toward most sevens</li>`);
+    if (card.name === '6') counts.push(`<li><span class="badge">6</span> tie-breaker for ${I18N.text('barmila')}</li>`);
+    if (isHaya) counts.push(`<li><span class="badge haya">+1</span> a point on its own, for whoever takes it</li>`);
+    let combos = '';
+    const gs = this.gameState;
+    if (inHand && gs && gs.tableCards) {
+      const cs = findCaptureCombinations(gs.tableCards, card.value);
+      combos = cs.length
+        ? `<p style="margin-top:12px"><b>Takes now:</b></p><ul class="info-list">${cs.map((c) => `<li><span class="combo">${c.map((i) => { const t = gs.tableCards[i]; return `<span class="mini-card${['hearts', 'diamonds'].includes(t.suit) ? ' red' : ''}">${t.display}</span>`; }).join('<span>+</span>')}</span>${c.length === gs.tableCards.length ? ` <span class="badge haya">${I18N.text('chkobba')}</span>` : ''}</li>`).join('')}</ul>`
+        : `<p style="margin-top:12px;color:var(--text-dim)">Takes nothing on this table. Playing it places it.</p>`;
+    }
+    const court = card.name === 'king' ? ' (king)' : card.name === 'jack' ? ' (jack)' : card.name === 'queen' ? ' (queen)' : '';
+    $('info-body').innerHTML = `<p>Value <b class="num">${card.value}</b>${court}. A take is any set of table cards adding up to it${card.value <= 7 ? '' : '; courts only take an equal court or a sum'}.</p><ul class="info-list">${counts.join('')}</ul>${combos}`;
+    this.openOverlay('ov-info');
+  },
+
+  renderRules() {
+    const $ = (id) => document.getElementById(id);
+    const r = I18N.RULES[this.rulesPage];
+    const sample = { karta: { suit: 'clubs', name: '4', display: '4', value: 4 }, dinari: { suit: 'diamonds', name: '3', display: '3', value: 3 }, haya: { suit: 'diamonds', name: '7', display: '7', value: 7 }, barmila: { suit: 'spades', name: '7', display: '7', value: 7 }, chkobba: { suit: 'hearts', name: 'king', display: 'K', value: 10 } }[r.key];
+    const box = $('rules-card'); box.innerHTML = '';
+    const node = Cards.build({ id: 900 + this.rulesPage, ...sample }, { interactive: true, idle: true }); node.classList.add('big'); box.appendChild(node);
+    $('rules-title').innerHTML = I18N.html(r.key);
+    $('rules-text').textContent = r.text;
+    $('rules-dots').innerHTML = I18N.RULES.map((_, i) => `<i class="${i === this.rulesPage ? 'on' : ''}"></i>`).join('');
+  },
+  showRules() { this.rulesPage = 0; this.renderRules(); this.openOverlay('ov-rules'); },
+
+  // ========== SOUND (UI cues; the choreography has its own tones in Juice) ==========
   playSound(type) {
-    if (!this.soundsEnabled) return;
+    if (!Look.prefs.sound || !this._audioUnlocked) return;
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return;
-      // One shared context, reused for every tone. Creating a new AudioContext per call
-      // (as before) leaked them until the browser cap was hit, after which all audio
-      // silently died. Resume in case autoplay policy left it suspended until a gesture.
       if (!this._audioCtx) this._audioCtx = new AudioCtx();
       const ctx = this._audioCtx;
       if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
@@ -1946,45 +2194,18 @@ const app = {
         const gainNode = ctx.createGain();
         osc.type = typeOpt;
         osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
-
         gainNode.gain.setValueAtTime(gainStart, ctx.currentTime + delay);
         gainNode.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay + duration);
-
         osc.connect(gainNode);
         gainNode.connect(ctx.destination);
-
         osc.start(ctx.currentTime + delay);
         osc.stop(ctx.currentTime + delay + duration);
       };
 
       if (type === 'click') {
         playTone(600, 0.05, 'triangle', 0.05);
-      } else if (type === 'place') {
-        const osc = ctx.createOscillator();
-        const gainNode = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(150, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 0.15);
-        gainNode.gain.setValueAtTime(0.15, ctx.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
-        osc.connect(gainNode);
-        gainNode.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.15);
-      } else if (type === 'capture') {
-        playTone(523.25, 0.1, 'sine', 0.1, 0); // C5
-        playTone(659.25, 0.25, 'sine', 0.1, 0.06); // E5
-      } else if (type === 'shkobba') {
-        const tempo = 0.08;
-        playTone(523.25, 0.15, 'sine', 0.12, 0);       // C5
-        playTone(659.25, 0.15, 'sine', 0.12, tempo);     // E5
-        playTone(783.99, 0.15, 'sine', 0.12, tempo * 2); // G5
-        playTone(1046.50, 0.4, 'sine', 0.15, tempo * 3); // C6
       } else if (type === 'win') {
-        const notes = [261.63, 329.63, 392.00, 523.25, 659.25, 783.99, 1046.50];
-        notes.forEach((freq, idx) => {
-          playTone(freq, 0.4, 'sine', 0.1, idx * 0.12);
-        });
+        [261.63, 329.63, 392.00, 523.25, 659.25, 783.99, 1046.50].forEach((freq, idx) => playTone(freq, 0.4, 'sine', 0.1, idx * 0.12));
       } else if (type === 'warning') {
         playTone(880, 0.08, 'sine', 0.08);
       } else if (type === 'timeout') {
@@ -1995,11 +2216,9 @@ const app = {
         osc.frequency.linearRampToValueAtTime(80, ctx.currentTime + 0.35);
         gainNode.gain.setValueAtTime(0.12, ctx.currentTime);
         gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-
         const filter = ctx.createBiquadFilter();
         filter.type = 'lowpass';
         filter.frequency.setValueAtTime(400, ctx.currentTime);
-
         osc.connect(filter);
         filter.connect(gainNode);
         gainNode.connect(ctx.destination);
@@ -2011,293 +2230,200 @@ const app = {
     }
   },
 
-  toggleSounds(checked) {
-    this.soundsEnabled = checked;
-    localStorage.setItem('chkoba_sounds', checked);
-    this.toast('Sound effects ' + (checked ? 'enabled' : 'disabled'));
-    if (checked) {
-      this.playSound('click');
-    }
-  },
-
-  toggleAnimations(checked) {
-    this.animationsEnabled = checked;
-    localStorage.setItem('chkoba_animations', checked);
-    this.toast('Animations ' + (checked ? 'enabled' : 'disabled'));
-  },
-
   // ========== TOAST ==========
   toast(message) {
     const el = document.getElementById('toast');
     el.textContent = message;
-    el.classList.remove('hidden');
+    el.classList.add('show');
     clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => el.classList.add('hidden'), 3000);
+    this._toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
   },
 
-  // ========== CONTROLS PANEL ==========
-  toggleControls() {
-    this.controlsOpen = !this.controlsOpen;
-    const panel = document.getElementById('controls-panel');
-    const btn = document.getElementById('btn-controls');
-    panel.classList.toggle('open', this.controlsOpen);
-    if (btn) btn.classList.toggle('active', this.controlsOpen);
-    if (this.controlsOpen) this.renderControlsContent();
+  // ========== IN-GAME MENU ==========
+  toggleMenu() {
+    this.menuOpen = !this.menuOpen;
+    if (this.menuOpen) { this.renderMenuContent(); this.openOverlay('ov-gamemenu'); }
+    else this.closeOverlay('ov-gamemenu');
   },
 
-  switchControlsTab(tab) {
-    this.controlsTab = tab;
-    document.querySelectorAll('.controls-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-    this.renderControlsContent();
+  switchMenuTab(tab) {
+    this.menuTab = tab;
+    document.querySelectorAll('#ov-gamemenu .tabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === tab));
+    document.querySelectorAll('#ov-gamemenu [data-tab]').forEach((p) => (p.hidden = p.dataset.tab !== tab));
+    this.renderMenuContent();
   },
 
-  renderControlsContent() {
-    const el = document.getElementById('controls-content');
-    if (!el) return;
-
-    switch (this.controlsTab) {
-      case 'stats': el.innerHTML = this.renderControlsStats(); break;
-      case 'settings': el.innerHTML = this.renderControlsSettings(); break;
-      case 'log': el.innerHTML = this.renderControlsLog(); break;
-      case 'actions': el.innerHTML = this.renderControlsActions(); break;
+  renderMenuContent() {
+    if (this.menuTab === 'stats') document.getElementById('gm-stats').innerHTML = this.renderMenuStats();
+    else if (this.menuTab === 'settings') document.getElementById('gm-settings').innerHTML = this.renderMenuSettings();
+    else if (this.menuTab === 'log') document.getElementById('gm-log').innerHTML = this.renderMenuLog();
+    else if (this.menuTab === 'actions') {
+      document.getElementById('gm-copy').hidden = !this.roomLink;
+      document.getElementById('gm-surrender').hidden = !(this.gameState && this.gameState.phase === 'playing');
     }
   },
 
-  renderControlsStats() {
+  renderMenuStats() {
     const gs = this.gameState;
-    if (!gs) return '<div style="color:var(--text-dim);padding:1rem;">No game in progress</div>';
-
+    if (!gs) return '<div class="empty-note">No game in progress</div>';
+    const t = (k) => I18N.text(k);
     const deckCount = gs.deck ? gs.deck.length : (gs.deckCount || 0);
-    const cap0 = gs.capturedCounts ? gs.capturedCounts[0] : (gs.capturedTeams ? gs.capturedTeams[0].length : 0);
-    const cap1 = gs.capturedCounts ? gs.capturedCounts[1] : (gs.capturedTeams ? gs.capturedTeams[1].length : 0);
-
-    // Diamond tracker
-    const diamondOwnership = gs.diamondOwnership || (this.isHost ? this.getDiamondOwnership() : {});
-    const diamondCards = ['ace', '2', '3', '4', '5', '6', '7', 'jack', 'queen', 'king'];
-    const diamondLabels = ['A', '2', '3', '4', '5', '6', '7', 'J', 'Q', 'K'];
-
-    let diamondHtml = '<div class="diamond-tracker">';
-    for (let i = 0; i < diamondCards.length; i++) {
-      const name = diamondCards[i];
-      const label = diamondLabels[i];
-      const owner = diamondOwnership[name];
-      let cls = 'diamond-cell';
-      if (owner === 0) cls += ' team1';
-      else if (owner === 1) cls += ' team2';
-      else cls += ' uncaptured';
-      diamondHtml += `<div class="${cls}">♦${label}</div>`;
-    }
-    diamondHtml += '</div>';
-
-    return `
-      <div class="controls-section">
-        <div class="controls-section-title">Game Status</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
-          <div style="background:rgba(0,0,0,0.2);padding:0.5rem;border-radius:8px;text-align:center;">
-            <div style="font-size:0.68rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;">Deck</div>
-            <div style="font-size:1.3rem;font-weight:800;color:var(--text-primary);">${deckCount}</div>
-          </div>
-          <div style="background:rgba(0,0,0,0.2);padding:0.5rem;border-radius:8px;text-align:center;">
-            <div style="font-size:0.68rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;">Round</div>
-            <div style="font-size:1.3rem;font-weight:800;color:var(--text-primary);">${gs.roundNum + 1}/${gs.totalRounds}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="controls-section">
-        <div class="controls-section-title">Team Scores</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
-          <div style="background:rgba(79,195,247,0.08);padding:0.6rem;border-radius:8px;text-align:center;border:1px solid rgba(79,195,247,0.2);">
-            <div style="font-size:0.68rem;color:var(--team1);text-transform:uppercase;letter-spacing:1px;">Team 1</div>
-            <div style="font-size:1.5rem;font-weight:800;color:var(--team1);">${gs.scores[0]}</div>
-            <div style="font-size:0.68rem;color:var(--text-dim);">Captured: ${cap0} | Shkobba: ${gs.shkobbaCount[0]}</div>
-          </div>
-          <div style="background:rgba(255,138,101,0.08);padding:0.6rem;border-radius:8px;text-align:center;border:1px solid rgba(255,138,101,0.2);">
-            <div style="font-size:0.68rem;color:var(--team2);text-transform:uppercase;letter-spacing:1px;">Team 2</div>
-            <div style="font-size:1.5rem;font-weight:800;color:var(--team2);">${gs.scores[1]}</div>
-            <div style="font-size:0.68rem;color:var(--text-dim);">Captured: ${cap1} | Shkobba: ${gs.shkobbaCount[1]}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="controls-section">
-        <div class="controls-section-title">♦ Diamond Tracker</div>
-        ${diamondHtml}
-        <div style="margin-top:0.4rem;font-size:0.68rem;color:var(--text-dim);display:flex;gap:1rem;justify-content:center;">
-          <span><span style="color:var(--team1);">■</span> Team 1</span>
-          <span><span style="color:var(--team2);">■</span> Team 2</span>
-          <span><span style="opacity:0.5;">■</span> Available</span>
-        </div>
-      </div>
-    `;
+    const cap = (i) => gs.capturedCounts ? gs.capturedCounts[i] : (gs.capturedTeams ? gs.capturedTeams[i].length : 0);
+    const teamName = (i) => gs.numPlayers === 4 ? `${t('team')} ${i + 1}` : (gs.players[i] ? escapeHtml(gs.players[i].name) : `${t('team')} ${i + 1}`);
+    const ownership = gs.diamondOwnership || (this.isHost ? this.getDiamondOwnership() : {});
+    const names = ['ace', '2', '3', '4', '5', '6', '7', 'jack', 'queen', 'king'];
+    const labels = ['A', '2', '3', '4', '5', '6', '7', 'J', 'Q', 'K'];
+    const pip = Cards.getSuit() === 'coin' ? '●' : '♦';
+    return `<div class="stat-grid">
+      <div class="hud-box"><span class="lbl">${t('round')}</span><span class="val num">${gs.roundNum + 1}/${gs.totalRounds}</span></div>
+      <div class="hud-box"><span class="lbl">${t('deck')}</span><span class="val num">${deckCount}</span></div>
+      <div class="hud-box" style="background:var(--team1)"><span class="lbl">${teamName(0)}</span><span class="val num">${gs.scores[0]}</span><span class="lbl">${t('karta')} ${cap(0)} · ${t('chkobba')} ${gs.shkobbaCount[0]}</span></div>
+      <div class="hud-box" style="background:var(--team2)"><span class="lbl">${teamName(1)}</span><span class="val num">${gs.scores[1]}</span><span class="lbl">${t('karta')} ${cap(1)} · ${t('chkobba')} ${gs.shkobbaCount[1]}</span></div></div>
+      <div class="lbl" style="margin-bottom:6px">${t('dinari')} tracker</div>
+      <div class="dt">${names.map((n, i) => { const o = ownership[n]; return `<span class="${o === 0 ? 't1' : o === 1 ? 't2' : ''}">${pip}${labels[i]}</span>`; }).join('')}</div>
+      <div class="row compact" style="margin-top:10px"><span class="lbl">Win at</span><span class="num">${gs.winScore}</span></div>
+      <div class="row compact"><span class="lbl">Force capture</span><span>${gs.forceCapture ? 'on' : 'off'}</span></div>
+      <div class="row compact"><span class="lbl">Capture assist</span><span>${gs.captureAssist ? 'on' : 'off'}</span></div>`;
   },
 
-  renderControlsSettings() {
+  renderMenuSettings() {
     const gs = this.gameState;
-    const fc = gs ? gs.forceCapture : this.forceCapture;
+    const host = this.isHost && !!gs;
+    const seg = (key, value, options, enabled) => `<div class="seg${key === 'labels' ? ' chipset' : ''}"${enabled ? '' : ' aria-disabled="true"'}>${options.map(([v, label]) => `<button data-set="${key}" data-v="${v}" class="${String(value) === String(v) ? 'on' : ''}">${label}</button>`).join('')}</div>`;
+    const row = (label, html) => `<div class="row compact"><span class="lbl">${label}</span>${html}</div>`;
+    const look = Look.get();
     const timer = gs ? (gs.turnTimerDuration || 0) : this.turnTimerDuration;
-
     return `
-      <div class="controls-section">
-        <div class="controls-section-title">Game Rules</div>
-        <div class="setting-row">
-          <label>Force Capture</label>
-          <label class="switch">
-            <input type="checkbox" ${fc ? 'checked' : ''} onchange="app.toggleForceCapture(this.checked)">
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <label>Sound Effects</label>
-          <label class="switch">
-            <input type="checkbox" ${this.soundsEnabled ? 'checked' : ''} onchange="app.toggleSounds(this.checked)">
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <label>Card Animations</label>
-          <label class="switch">
-            <input type="checkbox" ${this.animationsEnabled ? 'checked' : ''} onchange="app.toggleAnimations(this.checked)">
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div class="setting-row">
-          <label>Turn Timer</label>
-          <select onchange="app.changeTurnTimer(parseInt(this.value))" style="padding:0.3rem 0.5rem;border-radius:6px;border:1px solid var(--border-subtle);background:rgba(0,0,0,0.4);color:var(--text-primary);font-family:'Inter',sans-serif;font-size:0.8rem;">
-            <option value="0" ${timer === 0 ? 'selected' : ''}>Off</option>
-            <option value="15" ${timer === 15 ? 'selected' : ''}>15s</option>
-            <option value="30" ${timer === 30 ? 'selected' : ''}>30s</option>
-            <option value="45" ${timer === 45 ? 'selected' : ''}>45s</option>
-            <option value="60" ${timer === 60 ? 'selected' : ''}>60s</option>
-          </select>
-        </div>
+      <div class="setting-group">
+        <div class="gtitle">Rules <small>${host ? 'host controls' : 'the host controls these'}</small></div>
+        ${row('Force capture', seg('force', gs ? gs.forceCapture : this.forceCapture, [[true, 'On'], [false, 'Off']], host))}
+        ${row('Capture assist', seg('assist', gs ? !!gs.captureAssist : this.captureAssist, [[false, 'Off'], [true, 'On']], host))}
+        ${row('Turn timer', seg('timer', timer, [[0, 'Off'], [15, '15s'], [30, '30s'], [45, '45s'], [60, '60s']], host))}
       </div>
-
-      <div class="controls-section">
-        <div class="controls-section-title">Info</div>
-        <div style="font-size:0.78rem;color:var(--text-secondary);line-height:1.6;">
-          <p>🎴 <strong>Chkoba</strong> is a traditional Tunisian card game.</p>
-          <p>🎯 Capture cards from the table whose values sum to your played card.</p>
-          <p>⭐ <strong>Shkobba</strong>: Clearing the table earns a bonus point!</p>
-          <p>♦ Capturing all 10 diamonds = instant win!</p>
-        </div>
+      <div class="setting-group">
+        <div class="gtitle">Graphics <small>${host ? 'applies to everyone in the room' : 'the host picks the look'}</small></div>
+        ${row('Theme', seg('theme', look.theme, [['b', 'Felt'], ['a', 'Balatro'], ['c', 'Noir']], host))}
+        ${row('Cards', seg('cards', look.cards, [['photo', 'Photo'], ['svg', 'Flat'], ['pixel', 'Pixel']], host))}
+        ${row('Suits', seg('suits', look.suits, [['french', 'French'], ['coin', 'Coins']], host))}
       </div>
-    `;
+      <div class="setting-group">
+        <div class="gtitle">Motion <small>yours only</small></div>
+        ${row('Screen shake', seg('shake', Look.prefs.shake, [[true, 'On'], [false, 'Off']], true))}
+        ${row('Animations', seg('anim', Look.prefs.animations, [[true, 'On'], [false, 'Off']], true))}
+      </div>
+      <div class="setting-group">
+        <div class="gtitle">Labels and sound <small>yours only</small></div>
+        ${row('Labels', seg('labels', Look.prefs.labels, [['latin', 'Latin'], ['arabic', 'عربي'], ['english', 'EN']], true))}
+        ${row('Sound', seg('sound', Look.prefs.sound, [[true, 'On'], [false, 'Off']], true))}
+      </div>`;
   },
 
-  renderControlsLog() {
-    if (this.moveLog.length === 0) {
-      return '<div style="color:var(--text-dim);padding:1rem;text-align:center;">No moves yet</div>';
-    }
-
+  renderMenuLog() {
+    if (this.moveLog.length === 0) return '<div class="empty-note">No moves yet</div>';
     let html = '<div class="move-log">';
     for (let i = this.moveLog.length - 1; i >= 0; i--) {
       const entry = this.moveLog[i];
-      html += `<div class="move-log-entry">
-        <span class="move-log-time">${entry.time}</span>
-        <span class="move-log-text">${escapeHtml(entry.text)}</span>
-      </div>`;
+      html += `<div class="entry"><span class="t">${escapeHtml(entry.time)}</span><span>${escapeHtml(entry.text)}</span></div>`;
     }
-    html += '</div>';
-    return html;
+    return html + '</div>';
   },
 
-  renderControlsActions() {
-    return `
-      <div class="controls-section">
-        <div class="controls-section-title">Quick Actions</div>
-        <div class="quick-actions">
-          <button class="btn btn-secondary" onclick="app.copyRoomLink()">
-            <span class="icon">📋</span> Copy Room Link
-          </button>
-          <button class="btn btn-secondary" onclick="app.toggleControls()">
-            <span class="icon">🎮</span> Back to Game
-          </button>
-          <button class="btn btn-danger" onclick="app.surrenderGame()" style="margin-top:0.5rem;">
-            <span class="icon">🏳️</span> Surrender
-          </button>
-        </div>
-      </div>
-    `;
+  onMenuSetting(key, raw) {
+    const v = raw === 'true' ? true : raw === 'false' ? false : (raw !== '' && !isNaN(raw)) ? +raw : raw;
+    Juice.tick(0);
+    switch (key) {
+      case 'force': this.toggleForceCapture(v); break;
+      case 'assist': this.toggleCaptureAssist(v); break;
+      case 'timer': this.changeTurnTimer(v); break;
+      case 'theme': this.changeLook({ theme: v }); break;
+      case 'cards': this.changeLook({ cards: v }); break;
+      case 'suits': this.changeLook({ suits: v }); break;
+      case 'shake': Look.setPref('shake', v); break;
+      case 'anim': Look.setPref('animations', v); break;
+      case 'labels': Look.setPref('labels', v); this.renderGame(); break;
+      case 'sound': Look.setPref('sound', v); if (v) this.playSound('click'); break;
+    }
+    this.renderMenuContent();
   },
 
   toggleForceCapture(checked) {
-    if (!this.isHost || !this.gameState) {
-      this.toast('Only the host can change settings');
-      return;
-    }
+    if (!this.isHost || !this.gameState) { this.toast('Only the host can change the rules'); return; }
     this.gameState.forceCapture = checked;
     this.forceCapture = checked;
-    this.toast('Force capture ' + (checked ? 'enabled' : 'disabled'));
+    this.toast('Force capture ' + (checked ? 'on' : 'off'));
+    this.broadcastGameState();
+  },
+
+  toggleCaptureAssist(checked) {
+    if (!this.isHost || !this.gameState) { this.toast('Only the host can change the rules'); return; }
+    this.gameState.captureAssist = checked;
+    this.captureAssist = checked;
+    this.toast('Capture assist ' + (checked ? 'on' : 'off'));
     this.broadcastGameState();
   },
 
   changeTurnTimer(value) {
-    if (!this.isHost || !this.gameState) {
-      this.toast('Only the host can change settings');
-      return;
-    }
+    if (!this.isHost || !this.gameState) { this.toast('Only the host can change the rules'); return; }
     this.gameState.turnTimerDuration = value;
     this.turnTimerDuration = value;
-    this.toast('Turn timer ' + (value > 0 ? 'set to ' + value + 's' : 'disabled'));
+    this.toast('Turn timer ' + (value > 0 ? value + 's' : 'off'));
     this.broadcastGameState();
-    // Restart timer with new duration
-    if (this.gameState.phase === 'playing' && this.gameState.currentTurn >= 0) {
-      this.startTurnTimer();
-    }
+    if (this.gameState.phase === 'playing' && this.gameState.currentTurn >= 0) this.startTurnTimer();
+  },
+
+  // The host's look change is the room's look: it goes out with the state and also
+  // becomes the host's default for the next room.
+  changeLook(partial) {
+    if (!this.isHost || !this.gameState) { this.toast('The host picks the look'); return; }
+    const look = Look.setLook(partial, true);
+    this.gameState.look = look;
+    this.broadcastGameState();
   },
 
   surrenderGame() {
-    if (!this.gameState || this.gameState.phase !== 'playing') {
-      this.toast('No active game');
-      return;
-    }
-    const myTeam = this.gameState.players.find(p => p.id === this.myPlayerId)?.team;
-    if (myTeam === undefined) return;
-
-    if (confirm('Are you sure you want to surrender?')) {
-      if (this.isHost) {
-        const gs = this.gameState;
-        gs.phase = 'finished';
-        gs.winner = myTeam === 0 ? 1 : 0;
-        gs.currentTurn = -1;
-        gs.lastScore = null;
-        this.addLogEntry(`🏳️ Team ${myTeam + 1} surrendered!`);
-        this.broadcastGameState();
-        this.renderGame();
-        this.showScoreboard();
-      } else {
-        this.toast('Only the host can end the game');
-      }
-    }
-    this.toggleControls();
+    if (!this.gameState || this.gameState.phase !== 'playing') { this.toast('No active game'); return; }
+    const me = this.gameState.players.find(p => p.id === this.myPlayerId);
+    if (!me) return;
+    if (!confirm('Surrender this game?')) return;
+    if (!this.isHost) { this.toast('Only the host can end the game'); return; }
+    const gs = this.gameState;
+    gs.phase = 'finished';
+    gs.winner = me.team === 0 ? 1 : 0;
+    gs.endReason = 'surrender';
+    gs.currentTurn = -1;
+    gs.lastScore = null;
+    this.addLogEntry(`Team ${me.team + 1} surrendered`);
+    this.toggleMenu();
+    this.broadcastGameState();
+    this.renderGame();
   },
 
   // ========== EMOTES ==========
+  showEmote(name, text) {
+    const el = document.getElementById('emote-display');
+    if (!el) return;
+    el.textContent = `${name}: ${text}`;
+    el.hidden = false;
+    if (this._emoteTimeout) clearTimeout(this._emoteTimeout);
+    this._emoteTimeout = setTimeout(() => { el.hidden = true; this._emoteTimeout = null; }, 2000);
+  },
+
   sendEmote(emote) {
     const emotes = { gg: 'GG! \u{1F44F}', nice: 'Nice! \u{1F525}', wow: 'Wow! \u{1F632}', oops: 'Oops! \u{1F605}', hurry: 'Hurry up! ⏰' };
     const text = emotes[emote] || emote;
-    const el = document.getElementById('emote-display');
-    if (!el) return;
     const myPlayer = this.gameState && this.gameState.players ? this.gameState.players.find(p => p.id === this.myPlayerId) : null;
     const name = myPlayer ? myPlayer.name : this.myName;
-    el.textContent = `${name}: ${text}`;
-    el.classList.remove('hidden');
-    if (this._emoteTimeout) clearTimeout(this._emoteTimeout);
-    this._emoteTimeout = setTimeout(() => { el.classList.add('hidden'); this._emoteTimeout = null; }, 2000);
+    this.showEmote(name, text);
     this.playSound('click');
-    if (this._roomRef) {
-      this._roomRef.child('emote').set({ name, text, ts: Date.now() });
-    }
+    if (this._roomRef) this._roomRef.child('emote').set({ name, text, ts: Date.now() });
   },
 
   // ========== REMATCH ==========
   rematch() {
     if (!this.isHost) { this.toast('Only the host can start a rematch'); return; }
-    const modal = document.getElementById('score-modal');
-    if (modal) modal.classList.add('hidden');
+    this._closeEndOverlays();
     this.startGame();
-    this.toast('Rematch started!');
+    this.toast('Rematch');
   },
 
   // ========== DEBUG MODE ==========
@@ -2540,7 +2666,7 @@ const app = {
       </div>
 
       <div class="debug-section">
-        <div class="debug-section-title">Score & Shkobba</div>
+        <div class="debug-section-title">Score & Chkobba</div>
         <div class="debug-controls">
           <div class="debug-controls-row">
             <label style="font-size:0.72rem;color:var(--team1);min-width:30px;">T1:</label>
@@ -2550,9 +2676,9 @@ const app = {
             <button class="btn-debug" onclick="app.debugSetScores()">Set</button>
           </div>
           <div class="debug-controls-row">
-            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Shkobba T1:</label>
+            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Chkobba T1:</label>
             <input type="number" id="debug-shk-t1" class="debug-select" value="${gs.shkobbaCount[0]}" min="0" style="width:50px;">
-            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Shkobba T2:</label>
+            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Chkobba T2:</label>
             <input type="number" id="debug-shk-t2" class="debug-select" value="${gs.shkobbaCount[1]}" min="0" style="width:50px;">
             <button class="btn-debug" onclick="app.debugSetShkobba()">Set</button>
           </div>
@@ -2837,7 +2963,7 @@ const app = {
       shkobbaCount: gs.shkobbaCount, scores: gs.scores,
       lastCaptureTeam: gs.lastCaptureTeam, phase: gs.phase,
       cardsPlayedThisRound: gs.cardsPlayedThisRound,
-      shkobbaThisTurn: gs.shkobbaThisTurn, lastCapture: gs.lastCapture,
+      shkobbaThisTurn: gs.shkobbaThisTurn, lastMove: gs.lastMove,
       forceCapture: gs.forceCapture,
     });
     this._stateHistory.push(snap);
@@ -2863,13 +2989,12 @@ const app = {
     gs.capturedTeams = [[], []];
     gs.shkobbaCount = [0, 0];
     gs.lastCaptureTeam = -1;
-    gs.lastCapture = null;
+    gs.lastMove = null;
     gs.tableCards = [];
     gs.roundNum = 0;
     gs.deck = shuffle(createDeck());
     gs.phase = 'playing';
-    const modal = document.getElementById('score-modal');
-    if (modal) modal.classList.add('hidden');
+    this._closeEndOverlays();
     this.dealRound();
     this.toast('Round restarted!');
     this.updateDebugPanel();
@@ -2886,8 +3011,7 @@ const app = {
     if (!this._savedSnapshot) { this.toast('No snapshot saved'); return; }
     const snap = JSON.parse(this._savedSnapshot);
     this.gameState = snap;
-    const modal = document.getElementById('score-modal');
-    if (modal) modal.classList.add('hidden');
+    this._closeEndOverlays();
     this.broadcastGameState();
     this.renderGame();
     this.startTurnTimer();
@@ -3035,8 +3159,7 @@ const app = {
 
   debugResetGame() {
     if (!this.isHost) return;
-    const modal = document.getElementById('score-modal');
-    if (modal) modal.classList.add('hidden');
+    this._closeEndOverlays();
     this._stateHistory = [];
     this._controllingPlayerId = null;
     this._gameFrozen = false;
@@ -3122,5 +3245,4 @@ const app = {
   },
 };
 
-// Init on page load
 document.addEventListener('DOMContentLoaded', () => app.init());
