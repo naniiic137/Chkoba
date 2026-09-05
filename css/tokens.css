@@ -1,0 +1,158 @@
+/* ============================================================================
+   Token contract + the three themes. A theme is a block of variables on
+   html[data-theme]; nothing else in the app knows which theme is active.
+     a  Balatro grammar on a Tunisian palette (swirl shader, chunky type, fire)
+     b  the green felt with photo cards (default)
+     c  Noir Deco (near-black, brass, incised type)
+   The host picks the theme for the room; it arrives with the public state.
+   ========================================================================== */
+:root {
+  /* type */
+  --font-ui:      'Rubik', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Pixelify Sans', 'Rubik', sans-serif;
+  --font-num:     'Pixelify Sans', 'Rubik', sans-serif;
+  --font-arabic:  'Lalezar', 'Aref Ruqaa', serif;
+  --ui-tracking:  .04em;
+  --ui-case:      uppercase;
+
+  /* stage */
+  --bg:        #0f1a1c;
+  --bg-2:      #16262a;
+  --felt:      radial-gradient(120% 110% at 50% 30%, #1c2f34 0%, #101c20 60%, #0a1315 100%);
+  --swirl-1:   #1c2f5c;
+  --swirl-2:   #d9e3ee;
+  --swirl-3:   #d4b25a;
+  --swirl-spin: 1.0;
+  --swirl-speed: 1.0;
+  --swirl-contrast: 1.0;
+  --swirl-opacity: 1;
+
+  /* ink */
+  --text:     #f3ede0;
+  --text-dim: rgba(243,237,224,.66);
+  --text-mut: rgba(243,237,224,.40);
+
+  /* the Balatro pair + accents */
+  --chip:   #3f8fe0;
+  --mult:   #e0453f;
+  --gold:   #e6b84c;
+  --gold-hi:#f4d98a;
+  --green:  #4fae62;
+  --orange: #f28c28;
+  --haya:   #c8102e;
+  --team1:  var(--chip);
+  --team2:  var(--mult);
+
+  /* surfaces */
+  --panel:      #1d3035;
+  --panel-hi:   #274149;
+  --panel-rim:  rgba(243,237,224,.10);
+  --plate:      #f6f1e4;
+  --plate-ink:  #1f2a2e;
+  --radius:     14px;
+  --radius-sm:  9px;
+  --drop:       5px;                 /* the hard bottom shadow height */
+  --drop-color: rgba(0,0,0,.5);
+
+  /* cards */
+  --card-w:      clamp(66px, 8.4vw, 104px);
+  --card-h:      calc(var(--card-w) * 1.42);
+  --card-radius: 8px;
+  --card-face:   #fbf8f0;
+  --card-edge:   rgba(20,20,30,.22);
+  --card-ink:    #1f2630;
+  --card-red:    #d8362f;
+  --card-shadow: 0 5px 0 rgba(0,0,0,.35), 0 8px 18px rgba(0,0,0,.35);
+  --card-back:   repeating-linear-gradient(45deg, #1f4f8f 0 7px, #183f74 7px 14px);
+  --card-back-ink: #dbe7f5;
+  --rank-weight: 700;
+
+  /* fx */
+  --glow-haya: 0 0 22px rgba(200,16,46,.55);
+  --glow-gold: 0 0 18px rgba(230,184,76,.45);
+  --grain-opacity: .05;
+  --scanline-opacity: 0;
+
+  /* motion */
+  --juice-k:  .7;
+  --spring:   cubic-bezier(.34, 1.56, .64, 1);
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --lift:     calc(-14px * var(--juice-k));
+}
+
+/* ---------------------------------------------------------------- A */
+html[data-theme="a"] {
+  --bg: #0b1226; --bg-2: #101a36;
+  --felt: none;
+  --swirl-1: #17305e; --swirl-2: #dfe8f3; --swirl-3: #d9b45c;
+  --swirl-spin: 1.1; --swirl-speed: 1; --swirl-contrast: 1.15; --swirl-opacity: 1;
+  --panel: #1b2740; --panel-hi: #253656; --panel-rim: rgba(223,232,243,.14);
+  --plate: #f4efe2; --plate-ink: #1b2233;
+  --card-face: #fbf9f3; --card-ink: #1e2434; --card-red: #d6322c;
+  --card-back: repeating-linear-gradient(45deg, #1f4f8f 0 7px, #183f74 7px 14px);
+  --card-radius: 7px;
+  --scanline-opacity: .22; --grain-opacity: .04;
+  --team1: #3f8fe0; --team2: #e0453f;
+}
+
+/* ---------------------------------------------------------------- B */
+html[data-theme="b"] {
+  --font-display: 'Rubik', 'Segoe UI', sans-serif;
+  --font-num:     'Rubik', 'Segoe UI', sans-serif;
+  --font-arabic:  'Aref Ruqaa', serif;
+  --ui-tracking: .08em;
+  --bg: #0b1a12; --bg-2: #10241a;
+  --felt: radial-gradient(120% 110% at 50% 30%, #17402c 0%, #0e2a1d 60%, #071710 100%);
+  --swirl-opacity: 0;                 /* no shader: the felt is the ground */
+  --panel: #10251b; --panel-hi: #17352a; --panel-rim: rgba(230,184,76,.28);
+  --plate: #f3efe6; --plate-ink: #1a2a22;
+  --gold: #e6c04a; --gold-hi: #f5dd8a;
+  --card-face: #ffffff; --card-ink: #111; --card-red: #d21e1e;
+  --card-radius: 10px; --card-shadow: 0 4px 12px rgba(0,0,0,.5), 0 1px 3px rgba(0,0,0,.3);
+  --card-back: repeating-linear-gradient(45deg, #2a5fa8 0 6px, #234f8c 6px 12px);
+  --drop: 3px; --radius: 12px;
+  --scanline-opacity: 0; --grain-opacity: .03;
+  --team1: #4cc3ff; --team2: #ff8a5c;
+}
+
+/* ---------------------------------------------------------------- C */
+html[data-theme="c"] {
+  --font-display: 'Cinzel', Georgia, serif;
+  --font-num:     'Oswald', 'Cinzel', sans-serif;
+  --font-arabic:  'Aref Ruqaa', serif;
+  --ui-tracking: .14em;
+  --bg: #0b0d0e; --bg-2: #121516;
+  --felt: radial-gradient(120% 110% at 50% 30%, #1b2022 0%, #111415 60%, #0a0c0d 100%);
+  --swirl-1: #0d0f10; --swirl-2: #3a3126; --swirl-3: #8a6d2c;
+  --swirl-spin: .6; --swirl-speed: .5; --swirl-contrast: 1.6; --swirl-opacity: .9;
+  --text: #f2e8cf; --text-dim: rgba(242,232,207,.62); --text-mut: rgba(242,232,207,.38);
+  --gold: #c9a24b; --gold-hi: #ead08a;
+  --chip: #2c6a9e; --mult: #a8332c; --green: #4a8f5a; --orange: #c8642d;
+  --panel: #121617; --panel-hi: #1c2224; --panel-rim: rgba(201,162,75,.30);
+  --plate: #ecdfc2; --plate-ink: #1a1a1a;
+  --card-face: linear-gradient(160deg, #f6efdc 0%, #efe5c8 55%, #e6d8b4 100%);
+  --card-ink: #232b2e; --card-red: #b8302a; --card-edge: rgba(40,30,12,.30);
+  --card-radius: 9px; --card-shadow: 0 6px 14px rgba(0,0,0,.45), 0 1px 0 rgba(255,255,255,.35) inset;
+  --card-back: repeating-linear-gradient(45deg, #1e1a12 0 8px, #15120d 8px 16px);
+  --card-back-ink: #c9a24b;
+  --drop: 2px; --drop-color: rgba(0,0,0,.6); --radius: 10px; --radius-sm: 6px;
+  --scanline-opacity: 0; --grain-opacity: .07;
+  --team1: #c9a24b; --team2: #7ea6c8;
+  --rank-weight: 700;
+}
+
+/* legacy names still read by css/debug.css */
+:root {
+  --gold-dim: color-mix(in srgb, var(--gold) 70%, #000);
+  --gold-light: var(--gold-hi);
+  --gold-glow: color-mix(in srgb, var(--gold) 35%, transparent);
+  --bg-deepest: #000;
+  --border-subtle: var(--panel-rim);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-dim);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 6px);
+  --danger: var(--mult);
+}
+
+/* the animations switch sets html.reduce; the OS preference is read once at boot in look.js */
