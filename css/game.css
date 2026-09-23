@@ -66,7 +66,8 @@ html.reduce * { animation-duration: 0s !important; animation-iteration-count: 1 
 .frame__title .sub { font-family: var(--font-ui); font-size: 13px; color: var(--text-dim); letter-spacing: .04em; text-transform: none; }
 .plate { background: var(--plate); color: var(--plate-ink); border-radius: var(--radius-sm); padding: 14px 16px; box-shadow: 0 3px 0 rgba(0,0,0,.35); }
 .plate .term small { color: color-mix(in srgb, var(--plate-ink) 60%, transparent); }
-.rail { display: grid; grid-template-columns: 44px 1fr 44px; gap: 12px; align-items: stretch; }
+.rail { display: grid; grid-template-columns: 44px 1fr 44px; gap: 12px; align-items: center; }
+.rail__btn { height: 44px; }
 .rail__btn { border-radius: var(--radius-sm); background: var(--mult); color: #fff; font-size: 22px; display: grid; place-items: center; box-shadow: 0 var(--drop) 0 var(--drop-color); transition: transform .08s; }
 .rail__btn:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--drop-color); }
 .dots { display: flex; justify-content: center; gap: 5px; margin: 12px 0 4px; }
@@ -227,6 +228,9 @@ html[data-theme="c"] .pill.chip, html[data-theme="c"] .pill.green, html[data-the
 /* ============================================================================
    CARD
    ========================================================================== */
+/* --card-h is re-derived here so a card that sets its own --card-w (menu, rules, deck)
+   keeps the right shape instead of inheriting the page-level height */
+.card, .deck-pile { --card-h: calc(var(--card-w) * 1.42); }
 .card { position: relative; width: var(--card-w); height: var(--card-h); perspective: 760px; flex: none; border-radius: var(--card-radius);
   --rx: 0deg; --ry: 0deg; --lift-now: 0px; --scale: 1; --mx: 50%; --my: 50%; --holo: 0; }
 .card__inner { position: absolute; inset: 0; transform-style: preserve-3d; border-radius: inherit; background: var(--card-face); box-shadow: var(--card-shadow); border: 1px solid var(--card-edge); overflow: hidden;
