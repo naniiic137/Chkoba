@@ -377,6 +377,10 @@ html.reduce .fx-slam .word span { animation: none; }
 .cer-teams { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; margin-bottom: 8px; }
 .cer-team { text-align: center; font-family: var(--font-display); font-size: 14px; letter-spacing: .1em; text-transform: uppercase; padding: 6px; border-radius: 6px; color: #fff; }
 .cer-team.t1 { background: var(--team1); } .cer-team.t2 { background: var(--team2); }
+/* the names sit above the tally's flames, and the flames stay short, so a burning
+   first line never hides who won it */
+.cer-teams { position: relative; z-index: 3; }
+.cer-lines .fire { height: 85%; bottom: 70%; }
 .cer-lines { display: flex; flex-direction: column; gap: 8px; }
 .cer-line { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; opacity: .35; transition: opacity .25s; }
 .cer-line.on { opacity: 1; }
@@ -393,6 +397,8 @@ html.reduce .fx-slam .word span { animation: none; }
 
 /* match end */
 #ov-match .frame { text-align: center; width: min(100%, 560px); }
+#ov-match.lost .frame__title { color: var(--text-dim); }
+#ov-match.lost .match-sub { color: var(--text); }
 .match-score { font-family: var(--font-num); font-size: clamp(44px, 10vw, 84px); line-height: 1; font-weight: 700; margin: 14px 0; text-shadow: 0 6px 0 rgba(0,0,0,.45); }
 .confetti { position: fixed; inset: 0; pointer-events: none; z-index: 55; overflow: hidden; }
 .confetti i { position: absolute; top: -12px; width: 10px; height: 14px; background: var(--gold); animation: confetti 2.6s linear forwards; }

@@ -2003,16 +2003,26 @@ const app = {
     const $ = (id) => document.getElementById(id);
     const w = gs.winner >= 0 ? gs.winner : (gs.scores[0] > gs.scores[1] ? 0 : 1);
     const name = gs.numPlayers === 4 ? `${I18N.text('team')} ${w + 1}` : (gs.players[w] ? gs.players[w].name : `${I18N.text('team')} ${w + 1}`);
-    $('match-title').innerHTML = `${escapeHtml(name)} <span class="term"><b>${I18N.text('wins')}</b></span>`;
+    const me = gs.players ? gs.players.find((p) => p.id === this.myPlayerId) : null;
+    const lost = !!me && me.team !== w;
+    const ov = $('ov-match');
+    ov.classList.toggle('lost', lost);
+    ov.setAttribute('aria-label', lost ? 'You lost' : 'Match won');
+    $('match-title').innerHTML = lost
+      ? `<span class="term"><b>${I18N.text('youLost')}</b></span>`
+      : `${escapeHtml(name)} <span class="term"><b>${I18N.text('wins')}</b></span>`;
     const sub = $('match-sub');
-    if (gs.endReason === 'diamonds') { sub.textContent = 'all ten diamonds in one deal'; sub.hidden = false; }
-    else if (gs.endReason === 'surrender') { sub.textContent = 'the other side surrendered'; sub.hidden = false; }
-    else sub.hidden = true;
+    const reason = gs.endReason === 'diamonds' ? 'all ten diamonds in one deal'
+      : gs.endReason === 'surrender' ? (lost ? 'you surrendered' : 'the other side surrendered')
+      : gs.endReason === 'forfeit' ? 'the other side left the game' : '';
+    const why = lost ? [`${name} wins`, reason].filter(Boolean).join(' · ') : reason;
+    sub.textContent = why; sub.hidden = !why;
     $('match-score').innerHTML = `<span style="color:var(--team1)">${gs.scores[0]}</span> <span style="color:var(--text-dim);font-size:.5em">x</span> <span style="color:var(--team2)">${gs.scores[1]}</span>`;
     $('match-again').hidden = !this.isHost;
     this.openOverlay('ov-match');
-    Juice.chime();
     const c = $('confetti'); c.innerHTML = '';
+    if (lost) return;   // no chime and no confetti for the losing side
+    Juice.chime();
     if (Juice.getJuice() > 0) for (let i = 0; i < 70; i++) { const d = document.createElement('i'); d.style.left = Math.random() * 100 + '%'; d.style.background = ['var(--gold)', 'var(--chip)', 'var(--mult)', 'var(--text)'][i % 4]; d.style.animationDelay = Math.random() * .8 + 's'; d.style.animationDuration = 2 + Math.random() * 1.5 + 's'; c.appendChild(d); }
   },
 
@@ -2062,6 +2072,11 @@ const app = {
   // ========== SOUND (UI cues; the choreography has its own tones in Juice) ==========
   playSound(type) {
     if (!Look.prefs.sound || !this._audioUnlocked) return;
+    if (type === 'win' && this.gameState && this.gameState.players) {
+      // the fanfare is for the winning side only
+      const me = this.gameState.players.find((p) => p.id === this.myPlayerId);
+      if (me && this.gameState.winner >= 0 && me.team !== this.gameState.winner) return;
+    }
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return;
