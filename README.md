@@ -1,6 +1,7 @@
 # Chkobba / شكوبة
 
 **The classic Tunisian card game in the browser: play a bot offline, or share a link and play friends online in real time.**
+
 **▶ Play it online: [chkooba.netlify.app](https://chkooba.netlify.app)**
 
 
