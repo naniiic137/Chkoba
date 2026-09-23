@@ -29,7 +29,11 @@
       </div>
       <div id="config-error" class="config-error" hidden role="alert">Online play is unavailable: the server connection is not configured. Play vs bot still works.</div>
       <nav class="menu-stack">
-        <input type="text" id="menu-name" class="input" placeholder="Your name" aria-label="Your name" maxlength="20" autocomplete="nickname">
+        <div id="resume-box" class="resume-box" hidden role="region" aria-label="Saved game">
+          <span id="resume-text"></span>
+          <div class="resume-actions"><button class="pill sm gold" id="m-resume">Resume</button><button class="pill sm ghost" id="m-discard">Discard</button></div>
+        </div>
+        <input type="text" id="menu-name" class="input" placeholder="Your name" aria-label="Your name (optional against the bot)" maxlength="20" autocomplete="nickname">
         <button class="pill big gold" id="m-bot">Play vs bot</button>
         <button class="pill big chip" id="m-create">Create game</button>
         <button class="pill big green" id="m-join">Join game</button>
@@ -153,6 +157,7 @@
         </div>
       </div>
       <div id="emote-display" hidden></div>
+      <div id="away-banner" class="away-banner" role="status" hidden><span id="away-text"></span><button class="pill sm gold" id="away-claim" hidden>Claim the win</button></div>
     </section>
   </main>
 
@@ -204,6 +209,14 @@
       <div class="match-sub" id="match-sub" hidden></div>
       <div class="match-score" id="match-score"></div>
       <div class="actions"><button class="pill ghost" id="match-menu">Menu</button><button class="pill gold" id="match-again">Rematch</button></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="ov-left" role="alertdialog" aria-labelledby="left-title" aria-describedby="left-text">
+    <div class="frame" style="width:min(100%,460px)">
+      <div class="frame__title" id="left-title">A player left</div>
+      <p id="left-text" class="left-text"></p>
+      <div class="actions"><button class="pill ghost" id="left-wait">Wait</button><button class="pill gold" id="left-claim">Claim the win</button></div>
     </div>
   </div>
 

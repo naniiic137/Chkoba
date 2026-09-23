@@ -88,6 +88,8 @@ function escapeHtml(str) {
 // shkobbaThisTurn) so a mid-deploy client and host still understand each other.
 const ROOM_OPTS_KEY = 'chkobba_room_opts';
 const NAME_KEY = 'chkobba_name';
+const BOT_SAVE_KEY = 'chkobba_bot_save';   // a bot game in progress, so a reload can resume it
+const AWAY_GRACE_MS = 3000;                // a presence gap shorter than this is a blip, not a leave
 
 const app = {
   isHost: false,
@@ -140,6 +142,12 @@ const app = {
   _controllingPlayerId: null,
   _spyMode: false,
   _isBotGame: false,
+  _presence: {},
+  _presenceSeen: {},
+  _awaySince: {},
+  _awayConfirmed: [],
+  _awayDismissed: {},
+  _presenceRef: null,
   // render pipeline
   _shown: null,
   _renderQueued: false,
@@ -210,6 +218,7 @@ const app = {
     const code = params.get('room');
     if (code) this.showJoin(code.toUpperCase());
     else this.showMenu();
+    this.renderResumeOffer();
 
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
@@ -264,6 +273,11 @@ const app = {
     $('m-join').addEventListener('click', () => this.showJoin(''));
     $('m-rules').addEventListener('click', () => this.showRules());
     $('m-options').addEventListener('click', () => this.showOptions());
+    $('m-resume').addEventListener('click', () => this.resumeBotGame());
+    $('m-discard').addEventListener('click', () => { this.clearBotSave(); this.renderResumeOffer(); });
+    $('left-wait').addEventListener('click', () => this.waitForPlayer());
+    $('left-claim').addEventListener('click', () => this.claimWin());
+    $('away-claim').addEventListener('click', () => this.claimWin());
     document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', () => this.showScreen(b.dataset.back)));
     // join
     $('j-go').addEventListener('click', () => this.joinGame());
@@ -359,11 +373,14 @@ const app = {
       .forEach((c) => box.appendChild(Cards.build(c, { interactive: true, idle: true })));
   },
 
-  readName(inputId) {
-    const name = document.getElementById(inputId).value.trim();
-    if (!name) { this.toast('Enter your name first'); document.getElementById(inputId).focus(); return null; }
-    this._rememberName(name);
-    return name;
+  // fallback: a name to use when the field is empty (a bot game needs no real name);
+  // without one an empty field is refused.
+  readName(inputId, fallback) {
+    const typed = document.getElementById(inputId).value.trim();
+    if (!typed && fallback) return fallback;
+    if (!typed) { this.toast('Enter your name first'); document.getElementById(inputId).focus(); return null; }
+    this._rememberName(typed);
+    return typed;
   },
 
   // ========== ROOM MANAGEMENT ==========
@@ -415,6 +432,7 @@ const app = {
       this.roomLink = baseUrl + '?' + currentParams.toString();
       this.toast('Room ready');
       this.log('info', 'room created', this.roomCode, '(' + this.playerCount + 'p)');
+      this._armPresence(0);
 
       const playersRef = this._roomRef.child('players');
       playersRef.on('value', (snap) => {
@@ -476,8 +494,16 @@ const app = {
     this._roomRef.once('value').then((snap) => {
       const room = snap.val();
       if (!room || !room.host) { this.toast('Room not found'); return; }
-      // a slot freed by a dropped player must not let a newcomer into a running game
-      if (room.started) { this.toast('That game has already started'); return; }
+      // A slot freed by a dropped player must not let a newcomer into a running game,
+      // but the player who dropped may take their own seat back (same name, seat offline).
+      let rejoinSlot = -1;
+      if (room.started) {
+        const pres = room.presence || {};
+        const seats = room.state && room.state.players ? room.state.players : [];
+        const seat = seats.find((p) => p && p.id !== 0 && !p.isBot && p.name === name && !pres[p.id]);
+        if (!seat) { this.toast('That game has already started'); return; }
+        rejoinSlot = seat.id;
+      }
       const playerCount = room.playerCount || 2;
       this.playerCount = playerCount;
       this.forceCapture = room.forceCapture !== false;
@@ -493,8 +519,12 @@ const app = {
       this._roomRef.child('players').transaction((players) => {
         players = players || {};
         let slot = -1;
-        for (let i = 0; i < playerCount; i++) {
-          if (!players[i]) { slot = i; break; }
+        if (rejoinSlot >= 0) {
+          if (!players[rejoinSlot] || players[rejoinSlot] === this.myName) slot = rejoinSlot;
+        } else {
+          for (let i = 0; i < playerCount; i++) {
+            if (!players[i]) { slot = i; break; }
+          }
         }
         if (slot < 0) { claimedSlot = -1; return; } // abort: room full
         claimedSlot = slot;
@@ -510,7 +540,8 @@ const app = {
         // Free our slot if we disconnect, so a refresh/drop doesn't leave a ghost that
         // blocks rejoining or stalls turn rotation.
         this._roomRef.child('players/' + myId).onDisconnect().remove();
-        this.toast('Joined');
+        this._armPresence(myId);
+        this.toast(rejoinSlot >= 0 ? 'Back in the game' : 'Joined');
         this.roomLink = window.location.href.split('?')[0] + '?room=' + this.roomCode;
 
         const stateRef = this._roomRef.child('state');
@@ -573,7 +604,8 @@ const app = {
         });
         this._playerListeners.push(joinPlayersRef);
 
-        this.showWaiting();
+        // a rejoin may already have painted the running game from the cached state
+        if (!this.gameState) this.showWaiting();
       });
     }).catch((err) => {
       this.log('error', 'join failed (room read):', err);
@@ -695,7 +727,10 @@ const app = {
     this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
     this.stopTurnTimer();
     this.closeAllOverlays();
+    // leaving on purpose ends a bot game for good; only a reload or a closed tab keeps it
+    this.clearBotSave();
     this.showMenu();
+    this.renderResumeOffer();
   },
 
   cleanupListeners() {
@@ -709,6 +744,12 @@ const app = {
   // already removed.
   releaseRoom() {
     if (!this._roomRef) return;
+    if (this._presenceRef) {
+      this._presenceRef.onDisconnect().cancel();
+      this._presenceRef.remove().catch(() => {});
+      this._presenceRef = null;
+    }
+    this._resetPresence();
     if (this.isHost) {
       this._roomRef.remove().catch(() => {});
     } else if (this.myPlayerId >= 0) {
@@ -725,9 +766,212 @@ const app = {
     ['m-create', 'j-go'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
   },
 
+  // ========== PRESENCE (online rooms) ==========
+  // Every human seat keeps rooms/<code>/presence/<slot> = true while its tab is
+  // connected; onDisconnect removes it and .info/connected re-arms it after a network
+  // blip. Everyone watches the whole presence node: a seat that was seen and then
+  // stays gone longer than AWAY_GRACE_MS counts as having left. The host is then
+  // offered to wait (the player can rejoin with the same name) or to claim the win.
+  _armPresence(slot) {
+    if (!this._db || !this._roomRef) return;
+    const room = this._roomRef;
+    const ref = room.child('presence/' + slot);
+    this._presenceRef = ref;
+    const conn = this._db.ref('.info/connected');
+    conn.on('value', (snap) => {
+      if (snap.val() !== true || this._roomRef !== room) return;
+      ref.onDisconnect().remove()
+        .then(() => ref.set(true))
+        .catch((err) => this.log('warn', 'presence write failed:', err.message));
+      // a guest's seat is freed by onDisconnect: a reconnect must put it back
+      if (!this.isHost && this.myName) {
+        const seat = room.child('players/' + slot);
+        seat.onDisconnect().remove();
+        seat.set(this.myName).catch(() => {});
+      }
+    });
+    this._playerListeners.push(conn);
+    const all = room.child('presence');
+    all.on('value', (snap) => {
+      this._presence = snap.val() || {};
+      Object.keys(this._presence).forEach((k) => { this._presenceSeen[k] = true; });
+      this._checkPresence();
+    });
+    this._playerListeners.push(all);
+  },
+
+  _resetPresence() {
+    Object.values(this._awaySince).forEach((v) => clearTimeout(v.timer));
+    this._presence = {}; this._presenceSeen = {}; this._awaySince = {}; this._awayConfirmed = []; this._awayDismissed = {};
+    const ov = document.getElementById('ov-left'); if (ov) ov.classList.remove('open');
+    const b = document.getElementById('away-banner'); if (b) b.hidden = true;
+  },
+
+  _checkPresence() {
+    const gs = this.gameState;
+    if (!gs || !gs.players || this._isBotGame || !this._roomRef) return;
+    const live = gs.phase === 'playing' || gs.phase === 'round_end';
+    const now = Date.now();
+    const missing = live ? gs.players.filter((p) => p.id !== this.myPlayerId && !p.isBot && !this.isBotPlayer(p.id)
+      && this._presenceSeen[p.id] && !this._presence[p.id]) : [];
+    const missingIds = missing.map((p) => p.id);
+    // players who came back
+    Object.keys(this._awaySince).forEach((k) => {
+      const id = +k;
+      if (missingIds.includes(id)) return;
+      clearTimeout(this._awaySince[k].timer);
+      delete this._awaySince[k];
+      delete this._awayDismissed[id];
+      if (this._awayConfirmed.includes(id)) {
+        const p = gs.players[id];
+        this.toast(`${p ? p.name : 'A player'} is back`);
+      }
+    });
+    missing.forEach((p) => {
+      if (!this._awaySince[p.id]) this._awaySince[p.id] = { at: now, timer: setTimeout(() => this._checkPresence(), AWAY_GRACE_MS + 50) };
+    });
+    this._awayConfirmed = missing.filter((p) => now - this._awaySince[p.id].at >= AWAY_GRACE_MS).map((p) => p.id);
+    this.renderAway();
+  },
+
+  renderAway() {
+    const gs = this.gameState;
+    const ids = gs ? this._awayConfirmed : [];
+    const banner = document.getElementById('away-banner');
+    const ov = document.getElementById('ov-left');
+    if (!ids.length) { banner.hidden = true; ov.classList.remove('open'); return; }
+    const names = ids.map((id) => (gs.players[id] ? gs.players[id].name : 'A player'));
+    const who = names.join(' and ');
+    const hostGone = ids.includes(0) && !this.isHost;
+    banner.hidden = false;
+    document.getElementById('away-text').textContent = hostGone
+      ? `The host (${names[ids.indexOf(0)]}) lost connection, waiting for them`
+      : `${who} left the game${this.isHost ? '' : ', waiting for them to come back'}`;
+    document.getElementById('away-claim').hidden = !this.isHost;
+    if (!this.isHost) return;
+    // the host is asked once per leave; after "wait" the banner keeps the claim button
+    const fresh = ids.some((id) => !this._awayDismissed[id]);
+    if (!fresh) return;
+    const me = gs.players.find((p) => p.id === this.myPlayerId);
+    const ownTeamLeft = !!me && ids.every((id) => gs.players[id].team === me.team);
+    const verb = ownTeamLeft ? 'End the game' : 'Claim the win';
+    document.getElementById('left-title').textContent = `${who} left the game`;
+    document.getElementById('left-text').textContent = `They can rejoin with the same name and room code. Wait for them, or ${verb.toLowerCase()}.`;
+    document.getElementById('left-claim').textContent = verb;
+    document.getElementById('away-claim').textContent = verb;
+    ov.classList.add('open');
+  },
+
+  waitForPlayer() {
+    this._awayConfirmed.forEach((id) => { this._awayDismissed[id] = true; });
+    this.closeOverlay('ov-left');
+    this.toast('Waiting: they can rejoin with the same name');
+  },
+
+  // The side that is still here wins by forfeit.
+  claimWin() {
+    const gs = this.gameState;
+    this.closeOverlay('ov-left');
+    if (!this.isHost || !gs || !this._awayConfirmed.length) return;
+    if (gs.phase !== 'playing' && gs.phase !== 'round_end') return;
+    const leaver = gs.players[this._awayConfirmed[0]];
+    gs.phase = 'finished';
+    gs.winner = leaver.team === 0 ? 1 : 0;
+    gs.endReason = 'forfeit';
+    gs.currentTurn = -1;
+    this.stopTurnTimer();
+    this.addLogEntry(`${leaver.name} left, Team ${gs.winner + 1} wins by forfeit`);
+    this.playSound('win');
+    this.broadcastGameState();
+    this.renderGame();
+    this._checkPresence();
+  },
+
+  // ========== BOT GAME SAVE ==========
+  // The host of a bot game holds the only copy of its state, so it is kept in
+  // localStorage after every broadcast and offered back on the next visit.
+  saveBotGame() {
+    const gs = this.gameState;
+    if (!this._isBotGame || !gs) return;
+    if (gs.phase === 'finished') { this.clearBotSave(); return; }
+    try {
+      localStorage.setItem(BOT_SAVE_KEY, JSON.stringify({
+        v: 1, savedAt: Date.now(), myName: this.myName, botDifficulty: this.botDifficulty, gameSpeed: this.gameSpeed,
+        playerList: this.playerList, moveLog: this.moveLog.slice(-50), gameState: gs,
+      }));
+    } catch (e) { /* private mode or full storage: the game just cannot be resumed */ }
+  },
+
+  readBotSave() {
+    try {
+      const save = JSON.parse(localStorage.getItem(BOT_SAVE_KEY) || 'null');
+      const gs = save && save.gameState;
+      if (!save || save.v !== 1 || !gs || !Array.isArray(gs.hands) || !Array.isArray(gs.deck) || !Array.isArray(gs.players)) return null;
+      if (gs.phase === 'finished') return null;
+      return save;
+    } catch (e) { return null; }
+  },
+
+  clearBotSave() { try { localStorage.removeItem(BOT_SAVE_KEY); } catch (e) { /* ignore */ } },
+
+  renderResumeOffer() {
+    const box = document.getElementById('resume-box');
+    const save = this.readBotSave();
+    box.hidden = !save;
+    if (!save) return;
+    const gs = save.gameState;
+    const opp = gs.players[1] ? gs.players[1].name : 'the bot';
+    document.getElementById('resume-text').textContent =
+      `Resume your game vs ${opp}? ${gs.scores[0]} - ${gs.scores[1]}, deal ${Math.min(gs.roundNum + 1, gs.totalRounds)}/${gs.totalRounds}`;
+  },
+
+  resumeBotGame() {
+    const save = this.readBotSave();
+    if (!save) { this.renderResumeOffer(); this.toast('No saved game'); return; }
+    Juice.unlock();
+    const gs = save.gameState;
+    this.myName = save.myName || 'Player';
+    this.isHost = true;
+    this._isBotGame = true;
+    this.playerCount = 2;
+    this.botDifficulty = save.botDifficulty || 'medium';
+    this.gameSpeed = save.gameSpeed || 'normal';
+    this.forceCapture = gs.forceCapture !== false;
+    this.captureAssist = !!gs.captureAssist;
+    this.winScore = gs.winScore || 21;
+    this.turnTimerDuration = gs.turnTimerDuration || 0;
+    Look.setLook(gs.look || Look.savedLook(), false);
+    this.roomCode = 'BOT';
+    this.roomLink = '';
+    this.myPlayerId = 0;
+    this._controllingPlayerId = null;
+    this.playerList = save.playerList || gs.players.map((p) => p.name);
+    this.moveLog = save.moveLog || [];
+    this._roomRef = null;
+    this._botPlayers = {};
+    this._playerSlots = {};
+    this._roomStarted = true;
+    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
+    this._shown = null;
+    this.selectedCardIndex = -1; this.selectedCaptureIndices = []; this.availableCaptures = [];
+    this.isSubmittingMove = false;
+    this.closeAllOverlays();
+    this.gameState = gs;
+    this.addLogEntry('Game resumed');
+    this.log('info', 'bot game resumed:', gs.scores[0], '-', gs.scores[1]);
+    document.getElementById('resume-box').hidden = true;
+    this.broadcastGameState();
+    if (gs.phase === 'playing' && gs.currentTurn < 0 && gs.hands.every((h) => h.length === 0)) {
+      // saved between the last card of a deal and the next deal (or the scoring)
+      this.whenIdle().then(() => { if (this.gameState === gs) this.endRound(); });
+      return;
+    }
+    if (gs.phase === 'playing') { this.startTurnTimer(); this.triggerBotPlay(); }
+  },
+
   // ========== PLAY VS BOT ==========
   playVsBot() {
-    const name = this.readName('menu-name'); if (!name) return;
+    const name = this.readName('menu-name', 'Player'); if (!name) return;
     Juice.unlock();
     this.myName = name;
     this.isHost = true;
@@ -1178,6 +1422,8 @@ const app = {
       });
     }
     this.log('debug', 'broadcast state: turn', gs.currentTurn, 'phase', gs.phase, 'deck', gs.deck.length);
+    if (this._isBotGame) this.saveBotGame();
+    else this._checkPresence();
 
     this.myHand = gs.hands[this.activeId()] || [];
     this.renderGame();
@@ -1267,6 +1513,7 @@ const app = {
     this.renderGame();
     if (data.phase === 'playing' && data.currentTurn >= 0) this.startTurnTimer();
     else this.stopTurnTimer();
+    this._checkPresence();
   },
 
   // The seat this browser is playing: normally mine, or the seat the host is
