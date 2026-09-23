@@ -2373,8 +2373,20 @@ const app = {
   },
 
   // ========== TOAST ==========
+  // Messages sit just under a top HUD while a game is on screen, so they never cover
+  // the score boxes; elsewhere (menus, rail HUD) they keep their place at the top.
+  _belowHud(el, gap) {
+    const hud = document.getElementById('hud');
+    const gv = document.getElementById('game-view');
+    const inGame = document.documentElement.dataset.screen === 'game';
+    const r = hud ? hud.getBoundingClientRect() : null;
+    const top = inGame && r && r.height > 0 && r.height < window.innerHeight * 0.4 && !(gv && gv.dataset.hud === 'rail' && window.innerWidth > 900);
+    el.style.top = top ? Math.round(r.bottom + gap) + 'px' : '';
+  },
+
   toast(message) {
     const el = document.getElementById('toast');
+    this._belowHud(el, 4);
     el.textContent = message;
     el.classList.add('show');
     clearTimeout(this._toastTimer);
@@ -2545,6 +2557,7 @@ const app = {
     const el = document.getElementById('emote-display');
     if (!el) return;
     el.textContent = `${name}: ${text}`;
+    this._belowHud(el, 48);
     el.hidden = false;
     if (this._emoteTimeout) clearTimeout(this._emoteTimeout);
     this._emoteTimeout = setTimeout(() => { el.hidden = true; this._emoteTimeout = null; }, 2000);

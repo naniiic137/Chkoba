@@ -220,7 +220,7 @@ html[data-theme="c"] .pill.chip, html[data-theme="c"] .pill.green, html[data-the
 #my-captured { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); letter-spacing: .08em; text-transform: uppercase; min-height: 22px; }
 #my-captured .backs { display: flex; } #my-captured .backs .card-back.mini { margin-left: -9px; } #my-captured .backs .card-back.mini:first-child { margin-left: 0; }
 #my-captured b { color: var(--gold); font-family: var(--font-num); font-size: 15px; }
-#hand-cards { gap: clamp(8px, 1.4vw, 16px); }
+#hand-cards { gap: clamp(8px, 1.4vw, 16px); padding-top: 12px; }   /* room for a lifted card under the labels */
 #hand-actions { display: flex; gap: 10px; min-height: 52px; align-items: center; }
 #hand-actions .pill { min-width: 128px; }
 
@@ -437,9 +437,20 @@ html.reduce .fx-slam .word span { animation: none; }
   #play-area { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; gap: 6px; }
   #opponent-left, #opponent-right { justify-content: center; }
   .opp.side { flex-direction: row; padding: 6px 10px; }
-  #table-area { flex-direction: column; gap: 26px; }
-  .table-center { min-width: 0; width: 100%; }
-  .deck-pile { --card-w: 44px; }
+  /* phone: the deck sits beside the table cards instead of above them, so it can
+     neither run into the opponent panel nor put its count under a lifted card */
+  #table-area { flex-direction: row; align-items: center; gap: 14px; min-height: 0; padding: 4px 0 18px; }
+  .table-center { min-width: 0; flex: 1; }
+  .deck-pile { --card-w: 40px; margin-left: 6px; }
+  .deck-count { font-size: 11px; bottom: -19px; }
+  #table-area .card-row { gap: 6px; }
+  /* no dead band between the table and the hand: the free height is shared out */
+  #game-board { grid-template-rows: auto auto auto; align-content: space-evenly; padding-top: 2px; }
+  #play-area { align-content: center; }
+  /* name and captured pile share a line, with room above the hand for a lifted card */
+  #hand-area { flex-direction: row; flex-wrap: wrap; justify-content: center; column-gap: 14px; row-gap: 6px; }
+  #hand-area > #hand-cards, #hand-area > #hand-actions, #hand-area > #emote-bar, #hand-area > #possess-banner { flex-basis: 100%; }
+  #hand-cards { padding-top: 16px; }
   .info-grid { grid-template-columns: 1fr; justify-items: center; }
   .cer-line .fill { font-size: 15px; }
   .cer-box { font-size: 22px; }
