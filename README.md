@@ -1,6 +1,8 @@
 # Chkobba / شكوبة
 
 **The classic Tunisian card game in the browser: play a bot offline, or share a link and play friends online in real time.**
+**▶ Play it online: [chkooba.netlify.app](https://chkooba.netlify.app)**
+
 
 A multiplayer browser implementation of **Chkobba** (شكوبة), the popular Tunisian card game. Online games sync through Firebase Realtime Database, so they work across any network with no game server to run. It is written in vanilla HTML, CSS and JavaScript with no build step, and it deploys to any static host (Netlify, Vercel, GitHub Pages).
 
