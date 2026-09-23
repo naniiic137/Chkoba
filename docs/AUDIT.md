@@ -54,6 +54,8 @@ Authoritative state (`deck`, `hands`, `capturedTeams`) lives only in the host's 
 
 **Status in this PR:** a *graceful* host exit (Leave / Back to Menu) is now handled cleanly — the room is removed and clients are notified via the `host`-child listener instead of freezing. An *ungraceful* host close (tab killed, device sleep) still leaves clients on stale state: this is unchanged from before and is the part that needs presence + a reconnect grace window + host migration. We tried an `onDisconnect().remove()` on the room but reverted it — it deletes a live game on any transient blip and corrupts the room on the host's next write, which is worse than the freeze. Proper handling is the follow-up feature.
 
+**Update:** guests now have presence (`rooms/<code>/presence/<slot>` with `onDisconnect`) and can rejoin their own seat; the host is told when a guest leaves and can wait or claim the win. Guests also see a banner when the host's presence drops. Host migration is still not implemented.
+
 ### 4. No real server authority — the host (or any writer) is fully trusted
 **`game.js:580-673`, `801-858`**
 
