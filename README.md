@@ -169,4 +169,4 @@ The host can open the debug panel by running `debug()` in the browser console (p
 
 ## License
 
-MIT
+© 2026 Hamza Ben Ismail. All rights reserved.
