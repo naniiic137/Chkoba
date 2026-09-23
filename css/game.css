@@ -497,6 +497,11 @@ html.reduce .fx-slam .word span { animation: none; }
   .overlay.side .frame { width: 100%; }
 }
 
+/* a blocked move: the table card the rules require you to take */
+.card.must-take .card__inner { box-shadow: var(--card-shadow), 0 0 0 4px var(--green), 0 0 22px var(--green); }
+.card.must-take { animation: mustTake .6s ease-in-out 3; }
+@keyframes mustTake { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+
 /* capture assist: cards that can take something right now */
 .card.can-capture .card__inner { box-shadow: var(--card-shadow), 0 0 0 2px var(--green); }
 .pill.mult { background: var(--mult); }

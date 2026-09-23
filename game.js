@@ -58,32 +58,8 @@ function shuffle(arr) {
   return arr;
 }
 
-function findCaptureCombinations(tableCards, targetValue) {
-  // DFS with sum-pruning instead of a 2^n subset scan. Every card value is >= 1, so the
-  // recursion depth is bounded by targetValue (<= 10); the result count is capped because
-  // callers only need existence + one example, never the full enumeration. This cannot
-  // hang on a large table (e.g. force-capture off, many low cards) the way 1<<n did.
-  const results = [];
-  const n = tableCards.length;
-  const CAP = 256;
-  const dfs = (start, sum, indices) => {
-    if (results.length >= CAP) return;
-    if (sum === targetValue) { results.push(indices.slice()); return; }
-    if (sum > targetValue) return;
-    for (let i = start; i < n; i++) {
-      if (sum + tableCards[i].value > targetValue) continue;
-      indices.push(i);
-      dfs(i + 1, sum + tableCards[i].value, indices);
-      indices.pop();
-    }
-  };
-  dfs(0, 0, []);
-  return results;
-}
-
-function hasDirectMatch(hand, tableCards) {
-  return hand.some(c => tableCards.some(tc => tc.value === c.value));
-}
+// Capture legality, the bot's choice and scoring live in js/rules.js (pure, unit-tested).
+const { legalCaptures, hasDirectMatch, checkMove, chooseBotMove, autoPlayMove, scoreRound, dealsPerDeck, matchWinner } = ChkobaRules;
 
 function genRoomCode() {
   // Crypto-random, 8 chars from a 31-symbol alphabet (~8.5e11 keyspace) so room codes
@@ -838,65 +814,8 @@ const app = {
     const hand = gs.hands[playerId];
     if (!hand || hand.length === 0) return;
 
-    const diff = this.getBotDifficulty(playerId);
-    let bestMove = null;
-    let bestScore = -1;
-
-    if (diff === 'easy') {
-      const card = hand[Math.floor(Math.random() * hand.length)];
-      const captures = findCaptureCombinations(gs.tableCards, card.value);
-      if (captures.length > 0) {
-        const combo = captures[Math.floor(Math.random() * captures.length)];
-        bestMove = { cardId: card.id, captureCardIds: combo.map(i => gs.tableCards[i].id) };
-        bestScore = 1;
-      } else {
-        bestMove = { cardId: card.id, captureCardIds: [] };
-      }
-    } else {
-      for (let ci = 0; ci < hand.length; ci++) {
-        const card = hand[ci];
-        const captures = findCaptureCombinations(gs.tableCards, card.value);
-        if (captures.length > 0) {
-          for (const combo of captures) {
-            let score = combo.length;
-            const capturedCards = combo.map(i => gs.tableCards[i]);
-            if (capturedCards.some(c => c.suit === 'diamonds')) score += 3;
-            if (capturedCards.some(c => c.suit === 'diamonds' && c.name === '7')) score += 5;
-            if (combo.length === gs.tableCards.length) score += 10;
-            if (diff === 'hard') {
-              if (capturedCards.some(c => c.name === '7')) score += 4;
-              const directMatch = capturedCards.length === 1 && capturedCards[0].value === card.value;
-              if (directMatch) score += 2;
-            }
-            if (score > bestScore) {
-              bestScore = score;
-              bestMove = { cardId: card.id, captureCardIds: combo.map(i => gs.tableCards[i].id) };
-            }
-          }
-        }
-      }
-
-      if (!bestMove) {
-        const safeCards = hand.filter(c => !findCaptureCombinations(gs.tableCards, c.value).length);
-        if (diff === 'hard' && safeCards.length > 0) {
-          const lowCards = safeCards.sort((a, b) => a.value - b.value);
-          bestMove = { cardId: lowCards[0].id, captureCardIds: [] };
-        } else {
-          const card = safeCards.length > 0 ? safeCards[0] : hand[0];
-          bestMove = { cardId: card.id, captureCardIds: [] };
-        }
-      }
-    }
-
-    if (gs.forceCapture && bestScore < 0 && hasDirectMatch(hand, gs.tableCards)) {
-      for (const c of hand) {
-        const directIdx = gs.tableCards.findIndex(tc => tc.value === c.value);
-        if (directIdx >= 0) {
-          bestMove = { cardId: c.id, captureCardIds: [gs.tableCards[directIdx].id] };
-          break;
-        }
-      }
-    }
+    // legal captures only: a card of equal value on the table is taken before any sum
+    const bestMove = chooseBotMove(hand, gs.tableCards, this.getBotDifficulty(playerId), gs.forceCapture);
 
     // The delay is a function of the speed setting only, never of the hand (a
     // hand-dependent think time would leak information). The move waits for the
@@ -930,9 +849,7 @@ const app = {
     this._roomStarted = true;
     if (this._roomRef) this._roomRef.update({ started: true }).catch((err) => this.log('warn', 'could not mark the room started:', err.message));
 
-    const totalPlayerCards = numPlayers * 3;
-    const remainingRounds = Math.ceil((40 - 4 - totalPlayerCards) / totalPlayerCards);
-    const totalRounds = 1 + remainingRounds;
+    const totalRounds = dealsPerDeck(numPlayers);
 
     this.moveLog = [];
     this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
@@ -1079,27 +996,9 @@ const app = {
     const hand = gs.hands[playerId];
     if (!hand || hand.length === 0) return;
 
-    let card = null, captureIds = [];
-
-    if (gs.forceCapture && gs.tableCards.length > 0) {
-      for (const c of hand) {
-        const directIdx = gs.tableCards.findIndex(tc => tc.value === c.value);
-        if (directIdx >= 0) {
-          card = c;
-          captureIds = [gs.tableCards[directIdx].id];
-          break;
-        }
-      }
-    }
-
-    if (!card) {
-      const cardIndex = Math.floor(Math.random() * hand.length);
-      card = hand[cardIndex];
-      const captures = findCaptureCombinations(gs.tableCards, card.value);
-      if (captures.length > 0) {
-        captureIds = captures[0].map(i => gs.tableCards[i].id);
-      }
-    }
+    const mv = autoPlayMove(hand, gs.tableCards, gs.forceCapture);
+    const card = hand.find((c) => c.id === mv.cardId);
+    const captureIds = mv.captureCardIds;
 
     const playerName = gs.players[playerId] ? gs.players[playerId].name : 'Player ' + playerId;
     this.addLogEntry(`Time's up: ${playerName} auto-played ${getCardDisplayName(card)}`);
@@ -1134,25 +1033,15 @@ const app = {
     const playedCard = hand[cardIndex];
     const captureIds = data.captureCardIds || [];
 
-    if (captureIds.length > 0) {
-      const capIndices = captureIds.map(id => gs.tableCards.findIndex(c => c.id === id));
-      if (capIndices.includes(-1)) {
-        this.log('warn', 'move rejected: a capture card is not on the table');
-        this.startTurnTimer();
-        return;
-      }
-      const sum = capIndices.reduce((s, idx) => s + gs.tableCards[idx].value, 0);
-      if (sum !== playedCard.value) {
-        this.log('warn', 'move rejected: capture sum', sum, '!= card value', playedCard.value);
-        this.startTurnTimer();
-        return;
-      }
-    } else if (gs.forceCapture && gs.tableCards.length > 0) {
-      if (hasDirectMatch(hand, gs.tableCards)) {
-        this.log('debug', 'move rejected: force-capture is on and a direct match exists');
-        this.startTurnTimer();
-        return;
-      }
+    // one rule check for every source of moves (the host's own clicks, guests over
+    // Firebase, bots, the turn timer): sums must match, a card of equal value on the
+    // table must be taken before any sum, and force capture forbids placing
+    const verdict = checkMove(hand, gs.tableCards, playedCard.id, captureIds, gs.forceCapture);
+    if (!verdict.ok) {
+      this.log('warn', 'move rejected:', verdict.reason, 'player', playerId, getCardDisplayName(playedCard));
+      this._stateHistory.pop();
+      this.startTurnTimer();
+      return;
     }
 
     this.log('debug', 'processing move: player', playerId, 'plays', getCardDisplayName(playedCard),
@@ -1232,54 +1121,13 @@ const app = {
   // ========== SCORING ==========
   calculateScores() {
     const gs = this.gameState;
-    const teamCount = 2;
-
-    const capturedCounts = [gs.capturedTeams[0].length, gs.capturedTeams[1].length];
-    const diamondCounts = [0, 0], diamondSevens = [false, false];
-
-    for (let t = 0; t < teamCount; t++) {
-      for (const card of gs.capturedTeams[t]) {
-        if (card.suit === DIAMONDS) {
-          diamondCounts[t]++;
-          if (card.name === '7') diamondSevens[t] = true;
-        }
-      }
-    }
-
-    let mostCardsPt = capturedCounts[0] !== capturedCounts[1] ? (capturedCounts[0] > capturedCounts[1] ? 0 : 1) : -1;
-    let mostDiamondsPt = diamondCounts[0] !== diamondCounts[1] ? (diamondCounts[0] > diamondCounts[1] ? 0 : 1) : -1;
-
-    let sevenDiamondsPt = -1;
-    if (diamondSevens[0] && !diamondSevens[1]) sevenDiamondsPt = 0;
-    else if (!diamondSevens[0] && diamondSevens[1]) sevenDiamondsPt = 1;
-
-    // Most Sevens rule: more 7s gets +1. Tie on 7s: check 6s. Tie on 6s: no point.
-    const sevenCounts = [0, 0];
-    const sixCounts = [0, 0];
-    for (let t = 0; t < teamCount; t++) {
-      for (const card of gs.capturedTeams[t]) {
-        if (card.name === '7') sevenCounts[t]++;
-        if (card.name === '6') sixCounts[t]++;
-      }
-    }
-    let mostSevensPt = -1;
-    if (sevenCounts[0] !== sevenCounts[1]) {
-      mostSevensPt = sevenCounts[0] > sevenCounts[1] ? 0 : 1;
-    } else if (sixCounts[0] !== sixCounts[1]) {
-      mostSevensPt = sixCounts[0] > sixCounts[1] ? 0 : 1;
-    }
-
-    if (mostCardsPt >= 0) gs.scores[mostCardsPt]++;
-    if (mostDiamondsPt >= 0) gs.scores[mostDiamondsPt]++;
-    if (sevenDiamondsPt >= 0) gs.scores[sevenDiamondsPt]++;
-    if (mostSevensPt >= 0) gs.scores[mostSevensPt]++;
-    gs.scores[0] += gs.shkobbaCount[0];
-    gs.scores[1] += gs.shkobbaCount[1];
-
+    const r = scoreRound(gs.capturedTeams, gs.shkobbaCount);
+    gs.scores[0] += r.points[0];
+    gs.scores[1] += r.points[1];
     // counts travel with the verdicts so every client can stage the same tally
     gs.lastScore = {
-      mostCardsPt, mostDiamondsPt, sevenDiamondsPt, mostSevensPt,
-      counts: { cards: capturedCounts, diamonds: diamondCounts, haya: diamondSevens.map(Number), sevens: sevenCounts, sixes: sixCounts },
+      mostCardsPt: r.mostCardsPt, mostDiamondsPt: r.mostDiamondsPt, sevenDiamondsPt: r.sevenDiamondsPt, mostSevensPt: r.mostSevensPt,
+      counts: r.counts,
     };
     gs.phase = 'round_end';
     this.addLogEntry(`Deal scored: ${gs.scores[0]} - ${gs.scores[1]}`);
@@ -1290,11 +1138,7 @@ const app = {
 
   checkWinCondition() {
     const gs = this.gameState;
-    let winner = -1;
-    if (gs.scores[0] >= gs.winScore || gs.scores[1] >= gs.winScore) {
-      if (gs.scores[0] > gs.scores[1]) winner = 0;
-      else if (gs.scores[1] > gs.scores[0]) winner = 1;
-    }
+    const winner = matchWinner(gs.scores, gs.winScore);
     if (winner >= 0) {
       gs.phase = 'finished'; gs.winner = winner; gs.endReason = 'score';
       this.addLogEntry(`Team ${winner + 1} wins the game`);
@@ -1455,7 +1299,7 @@ const app = {
     if (!card) return;
     this.selectedCardIndex = index;
     this.selectedCaptureIndices = [];
-    this.availableCaptures = findCaptureCombinations(gs.tableCards, card.value);
+    this.availableCaptures = legalCaptures(gs.tableCards, card.value);
     // assist: a single possible take is picked for you; without it you pick every card
     if (gs.captureAssist && this.availableCaptures.length === 1) {
       this.selectedCaptureIndices = this.availableCaptures[0].map((i) => gs.tableCards[i].id);
@@ -1470,7 +1314,7 @@ const app = {
     const card = this.myHand[index];
     if (!card) return;
     this.selectedCaptureIndices = [];
-    this.availableCaptures = findCaptureCombinations(gs.tableCards, card.value);
+    this.availableCaptures = legalCaptures(gs.tableCards, card.value);
     this.refreshSelection();
     this.placeCard();
   },
@@ -1500,11 +1344,10 @@ const app = {
   placeCard() {
     const gs = this.gameState;
     if (this.selectedCardIndex === -1 || !gs) return;
-    if (gs.forceCapture && gs.tableCards.length > 0 && hasDirectMatch(this.myHand, gs.tableCards)) {
-      this.toast('A matching card is on the table: you must take it'); return;
-    }
     const card = this.myHand[this.selectedCardIndex];
     if (!card) return;
+    const verdict = checkMove(this.myHand, gs.tableCards, card.id, [], gs.forceCapture);
+    if (!verdict.ok) { this.blockedMove(verdict, card); return; }
     this.sendMove(card.id, []);
   },
 
@@ -1514,12 +1357,41 @@ const app = {
     const card = this.myHand[this.selectedCardIndex];
     const gs = this.gameState;
     if (!card || !gs) return;
-    const sum = this.selectedCaptureIndices.reduce((s, id) => {
-      const c = gs.tableCards.find(tc => tc.id === id);
-      return s + (c ? c.value : 0);
-    }, 0);
-    if (sum !== card.value) { this.toast('Those cards must add up to ' + card.value); return; }
+    const verdict = checkMove(this.myHand, gs.tableCards, card.id, this.selectedCaptureIndices, gs.forceCapture);
+    if (!verdict.ok) { this.blockedMove(verdict, card); return; }
     this.sendMove(card.id, this.selectedCaptureIndices.slice());
+  },
+
+  // A move the rules refuse: say why and light up the table card(s) that must be taken.
+  blockedMove(verdict, card) {
+    const gs = this.gameState;
+    const must = (verdict.mustTake || []).map((id) => gs.tableCards.find((c) => c.id === id)).filter(Boolean);
+    const names = must.map((c) => getCardDisplayName(c)).join(' or ');
+    if (verdict.reason === 'must-take-match') {
+      this.toast(`${names} is on the table: a ${card.display} must take it`);
+      this.selectedCaptureIndices = [];
+      this.refreshSelection();
+    } else if (verdict.reason === 'must-capture') {
+      this.toast(names ? `You must take ${names}` : 'A capture is required');
+    } else if (verdict.reason === 'bad-sum') {
+      this.toast('Those cards must add up to ' + card.value);
+    } else {
+      this.toast('That move is not allowed');
+    }
+    this.flashMustTake(verdict.mustTake || []);
+    Juice.tick(0);
+  },
+
+  flashMustTake(ids) {
+    if (!ids.length) return;
+    const gs = this.gameState;
+    [...document.getElementById('table-cards').children].forEach((el, i) => {
+      const c = gs.tableCards[i];
+      if (!c || !ids.includes(c.id)) return;
+      el.classList.remove('must-take'); void el.offsetWidth; el.classList.add('must-take');
+      clearTimeout(el._mustTimer);
+      el._mustTimer = setTimeout(() => el.classList.remove('must-take'), 2400);
+    });
   },
 
   cancelSelection(repaint) {
@@ -1815,7 +1687,7 @@ const app = {
     handEls.forEach((el, i) => {
       el.classList.toggle('selected', has && i === this.selectedCardIndex);
       // assist: which cards can take something right now
-      const can = assist && this.myHand[i] && findCaptureCombinations(gs.tableCards, this.myHand[i].value).length > 0;
+      const can = assist && this.myHand[i] && legalCaptures(gs.tableCards, this.myHand[i].value).length > 0;
       el.classList.toggle('can-capture', !!can);
     });
     const targets = new Set(has && assist ? this.availableCaptures.flat() : []);
@@ -1832,6 +1704,9 @@ const app = {
     const sum = has ? this.selectedCaptureIndices.reduce((s, id) => { const c = gs.tableCards.find((t) => t.id === id); return s + (c ? c.value : 0); }, 0) : 0;
     const valid = has && this.selectedCaptureIndices.length > 0 && sum === card.value;
     const mustTake = has && gs.forceCapture && gs.tableCards.length > 0 && hasDirectMatch(this.myHand, gs.tableCards);
+    // a sum picked while a card of equal value lies on the table: the rules want that card
+    const matchFirst = has && this.selectedCaptureIndices.length > 0 && gs.tableCards.some((c) => c.value === card.value)
+      && !(this.selectedCaptureIndices.length === 1 && (gs.tableCards.find((c) => c.id === this.selectedCaptureIndices[0]) || {}).value === card.value);
     const busy = this.isSubmittingMove;
     cap.hidden = !has || (assist && this.availableCaptures.length === 0);
     place.hidden = !has || mustTake;
@@ -1850,9 +1725,11 @@ const app = {
           ? `${card.display} takes ${this.availableCaptures[0].map((i) => gs.tableCards[i].display).join(' + ')}`
           : `${this.availableCaptures.length} takes possible, pick the cards`;
     } else {
-      msg.textContent = this.selectedCaptureIndices.length
-        ? (valid ? `${sum} = ${card.value}` : `${sum} of ${card.value}`)
-        : (mustTake ? 'a matching card is on the table' : '');
+      msg.textContent = matchFirst
+        ? `take the ${card.display} on the table, not a sum`
+        : this.selectedCaptureIndices.length
+          ? (valid ? `${sum} = ${card.value}` : `${sum} of ${card.value}`)
+          : (mustTake ? 'a matching card is on the table: take it' : '');
     }
   },
 
@@ -2157,13 +2034,13 @@ const app = {
     let combos = '';
     const gs = this.gameState;
     if (inHand && gs && gs.tableCards) {
-      const cs = findCaptureCombinations(gs.tableCards, card.value);
+      const cs = legalCaptures(gs.tableCards, card.value);
       combos = cs.length
         ? `<p style="margin-top:12px"><b>Takes now:</b></p><ul class="info-list">${cs.map((c) => `<li><span class="combo">${c.map((i) => { const t = gs.tableCards[i]; return `<span class="mini-card${['hearts', 'diamonds'].includes(t.suit) ? ' red' : ''}">${t.display}</span>`; }).join('<span>+</span>')}</span>${c.length === gs.tableCards.length ? ` <span class="badge haya">${I18N.text('chkobba')}</span>` : ''}</li>`).join('')}</ul>`
         : `<p style="margin-top:12px;color:var(--text-dim)">Takes nothing on this table. Playing it places it.</p>`;
     }
     const court = card.name === 'king' ? ' (king)' : card.name === 'jack' ? ' (jack)' : card.name === 'queen' ? ' (queen)' : '';
-    $('info-body').innerHTML = `<p>Value <b class="num">${card.value}</b>${court}. A take is any set of table cards adding up to it${card.value <= 7 ? '' : '; courts only take an equal court or a sum'}.</p><ul class="info-list">${counts.join('')}</ul>${combos}`;
+    $('info-body').innerHTML = `<p>Value <b class="num">${card.value}</b>${court}. A take is any set of table cards adding up to it, but a card of equal value on the table must be taken first${card.value <= 7 ? '' : '; courts only take an equal court or a sum'}.</p><ul class="info-list">${counts.join('')}</ul>${combos}`;
     this.openOverlay('ov-info');
   },
 
