@@ -1,9 +1,32 @@
+# Dependencies
 node_modules/
+
+# Local Firebase config (generated at build time on Netlify from env vars)
+firebase-config.js
+
+# Environment files
 .env
+.env.*
+!.env.example
+
+# Firebase / npm debug logs
+*.log
+firebase-debug.log
+firebase-debug.*.log
+database-debug.log
+npm-debug.log*
+.firebase/
+
+# Netlify local state
+.netlify/
+
+# OS / editor files
 .DS_Store
 Thumbs.db
-*.log
-firebase-config.js
+desktop.ini
+.vscode/
+.idea/
+*.swp
 
 # local iteration space for the UI rework (menus, scenes, tweak panel). Never committed.
 demo/
