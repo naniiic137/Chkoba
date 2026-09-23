@@ -911,9 +911,11 @@ const app = {
     this.triggerBotPlay();
   },
 
+  // roundNum counts the deals of the current deck (0-based). It only moves on when
+  // another deal actually goes out, so the last deal of a deck is still shown as n/n
+  // on the tally and the match-end screen.
   endRound() {
     const gs = this.gameState;
-    gs.roundNum++;
     this.stopTurnTimer();
     if (gs.deck.length === 0) {
       if (gs.tableCards.length > 0 && gs.lastCaptureTeam >= 0) {
@@ -922,6 +924,7 @@ const app = {
       }
       this.calculateScores(); return;
     }
+    gs.roundNum++;
     this.dealRound();
   },
 
@@ -1147,11 +1150,11 @@ const app = {
       this.broadcastGameState(); this.renderGame();
       return;
     }
-    if (gs.deck.length > 0) { gs.phase = 'playing'; this.dealRound(); return; }
+    if (gs.deck.length > 0) { gs.phase = 'playing'; gs.roundNum++; this.dealRound(); return; }
 
     // Deck is empty: the deal passes on and a fresh deck goes out
     gs.dealerIndex = (gs.dealerIndex + 1) % gs.numPlayers;
-    gs.totalRounds = 1 + Math.ceil((40 - 4 - gs.numPlayers * 3) / (gs.numPlayers * 3));
+    gs.totalRounds = dealsPerDeck(gs.numPlayers);
     gs.phase = 'playing'; gs.deck = shuffle(createDeck());
     gs.capturedTeams = [[], []]; gs.shkobbaCount = [0, 0]; gs.lastCaptureTeam = -1;
     gs.tableCards = []; gs.roundNum = 0; gs.lastMove = null; gs.lastScore = null; this.dealRound();
@@ -1543,14 +1546,14 @@ const app = {
     const $ = (id) => document.getElementById(id);
     const t = (key) => I18N.text(key);
     const teamName = (i) => gs.numPlayers === 4 ? `${t('team')} ${i + 1}` : (gs.players[i] ? gs.players[i].name : `${t('team')} ${i + 1}`);
-    $('hud-round').textContent = `${gs.roundNum + 1}/${gs.totalRounds}`;
+    $('hud-round').textContent = `${Math.min(gs.roundNum + 1, gs.totalRounds)}/${gs.totalRounds}`;
     $('hud-deck').textContent = gs.deck ? gs.deck.length : (gs.deckCount || 0);
     $('hud-t1').textContent = gs.scores[0]; $('hud-t2').textContent = gs.scores[1];
     $('hud-t1-shk').textContent = gs.shkobbaCount[0] ? `+${gs.shkobbaCount[0]} ${t('chkobba')}` : '';
     $('hud-t2-shk').textContent = gs.shkobbaCount[1] ? `+${gs.shkobbaCount[1]} ${t('chkobba')}` : '';
     $('hud-t1-name').textContent = teamName(0);
     $('hud-t2-name').textContent = teamName(1);
-    $('lbl-round').textContent = t('round'); $('lbl-deck').textContent = t('deck');
+    $('lbl-round').textContent = t('deal'); $('lbl-deck').textContent = t('deck');
     this.renderTurnLabel(gs);
   },
 
@@ -2152,7 +2155,7 @@ const app = {
     const labels = ['A', '2', '3', '4', '5', '6', '7', 'J', 'Q', 'K'];
     const pip = Cards.getSuit() === 'coin' ? '●' : '♦';
     return `<div class="stat-grid">
-      <div class="hud-box"><span class="lbl">${t('round')}</span><span class="val num">${gs.roundNum + 1}/${gs.totalRounds}</span></div>
+      <div class="hud-box"><span class="lbl">${t('deal')}</span><span class="val num">${Math.min(gs.roundNum + 1, gs.totalRounds)}/${gs.totalRounds}</span></div>
       <div class="hud-box"><span class="lbl">${t('deck')}</span><span class="val num">${deckCount}</span></div>
       <div class="hud-box" style="background:var(--team1)"><span class="lbl">${teamName(0)}</span><span class="val num">${gs.scores[0]}</span><span class="lbl">${t('karta')} ${cap(0)} · ${t('chkobba')} ${gs.shkobbaCount[0]}</span></div>
       <div class="hud-box" style="background:var(--team2)"><span class="lbl">${teamName(1)}</span><span class="val num">${gs.scores[1]}</span><span class="lbl">${t('karta')} ${cap(1)} · ${t('chkobba')} ${gs.shkobbaCount[1]}</span></div></div>

@@ -18,6 +18,7 @@
     dealing: { ar: 'توزيع',         latin: 'DEALING',  en: 'Dealing' },
     thinking:{ ar: 'يفكّر',         latin: 'THINKING', en: 'Thinking' },
     round:   { ar: 'جولة',          latin: 'ROUND',    en: 'Round' },
+    deal:    { ar: 'توزيعة',        latin: 'DEAL',     en: 'Deal' },
     deck:    { ar: 'الورق',         latin: 'DECK',     en: 'Deck' },
     score:   { ar: 'النقاط',        latin: 'SCORE',    en: 'Score' },
     wins:    { ar: 'ربح',           latin: 'WIN',      en: 'wins' },
