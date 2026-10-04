@@ -2,6 +2,7 @@
 per player. Start a server first, then:
 
   python tests/e2e/e2e.py local   http://127.0.0.1:3110    # npm start: 2p round, 4p teams, reload, offline bot
+  python tests/e2e/e2e.py away    http://127.0.0.1:3110    # a drop, the 60 s hold, a bot takes the seat
   python tests/e2e/e2e.py online  http://127.0.0.1:8794    # wrangler dev: the 2-player round
   python tests/e2e/e2e.py split   http://127.0.0.1:8795 http://127.0.0.1:8794
         # Pages-style: the page from a static server, the rooms from the Worker
@@ -212,6 +213,36 @@ def offline_bot(browser, base):
     ctx.close()
 
 
+def away_flow(browser, base):
+    """A dropped player: the reconnect banner, the 60 s seat hold, then a bot takes the seat."""
+    ca, a = new_player(browser, base, 'A')
+    cb, b = new_player(browser, base, 'B')
+    code, link = create_room(a, 'Ana')
+    join_by_link(b, link, 'Ben')
+    a.wait_for_function("!document.getElementById('w-start').disabled")
+    a.click('#w-start')
+    wait_screen(a, 'game')
+    wait_screen(b, 'game')
+    # a network blip: B shows "Reconnecting", then gets the same seat back
+    cb.set_offline(True)
+    b.evaluate("() => app.net.wake()")   # a dead socket is noticed at once instead of after the ping timeout
+    b.wait_for_selector('#net-banner:not([hidden])', timeout=30000)
+    cb.set_offline(False)
+    b.wait_for_selector('#net-banner', state='hidden', timeout=30000)
+    assert b.evaluate("() => app.myPlayerId") == 1
+    print('  blip: reconnect banner shown, seat 1 resumed')
+    # B leaves for good (the tab closes): A sees the hold count down, then decides
+    cb.close()
+    a.wait_for_selector('#away-banner:not([hidden])', timeout=60000)
+    print('  hold:', a.inner_text('#away-text'))
+    a.wait_for_selector('#ov-left.open', timeout=90000)
+    a.click('#left-bot')
+    a.wait_for_function("() => app.snap.seats[1].takeover && app.gameState.players[1].isBot", timeout=10000)
+    play_until([a], lambda: a.evaluate("() => app.gameState.moveSeq >= 6"), what='six moves with the bot in the seat')
+    print('  after 60 s: "Let a bot play" handed the seat to a bot and the game went on')
+    ca.close()
+
+
 def main():
     mode, base = sys.argv[1], sys.argv[2].rstrip('/') + '/'
     server = sys.argv[3] if len(sys.argv) > 3 else None
@@ -226,6 +257,8 @@ def main():
                 two_player_round(browser, base)
             elif mode == 'split':
                 two_player_round(browser, base, server=server)
+            elif mode == 'away':
+                away_flow(browser, base)
         finally:
             browser.close()
     real = [e for e in errors if 'favicon' not in e]
