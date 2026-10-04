@@ -12,5 +12,5 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
   // pages that may use this server from another site (the Pages copy of public/);
   // comma-separated, subdomains included
-  "vars": { "ALLOWED_HOSTS": "chkobba.pages.dev,chkooba.netlify.app" }
+  "vars": { "ALLOWED_HOSTS": "chkooba.pages.dev,chkooba.netlify.app" }
 }
