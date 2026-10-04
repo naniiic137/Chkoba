@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# An old local Firebase key file (no longer used): never commit it
+firebase-config.js
+
 # Environment files
 .env
 .env.*
