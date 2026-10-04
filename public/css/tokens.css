@@ -141,18 +141,4 @@ html[data-theme="c"] {
   --rank-weight: 700;
 }
 
-/* legacy names still read by css/debug.css */
-:root {
-  --gold-dim: color-mix(in srgb, var(--gold) 70%, #000);
-  --gold-light: var(--gold-hi);
-  --gold-glow: color-mix(in srgb, var(--gold) 35%, transparent);
-  --bg-deepest: #000;
-  --border-subtle: var(--panel-rim);
-  --text-primary: var(--text);
-  --text-secondary: var(--text-dim);
-  --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) + 6px);
-  --danger: var(--mult);
-}
-
 /* the animations switch sets html.reduce; the OS preference is read once at boot in look.js */

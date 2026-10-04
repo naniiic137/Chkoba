@@ -1,76 +1,13 @@
 // ===================== CONSTANTS =====================
-const SUITS = ['hearts', 'diamonds', 'clubs', 'spades'];
-const DIAMONDS = 'diamonds';
-
-const CARD_DEFS = [
-  { name: 'ace', display: 'A', value: 1 },
-  { name: '2', display: '2', value: 2 },
-  { name: '3', display: '3', value: 3 },
-  { name: '4', display: '4', value: 4 },
-  { name: '5', display: '5', value: 5 },
-  { name: '6', display: '6', value: 6 },
-  { name: '7', display: '7', value: 7 },
-  { name: 'jack', display: 'J', value: 9 },
-  { name: 'queen', display: 'Q', value: 8 },
-  { name: 'king', display: 'K', value: 10 },
-];
-
-const FACE_NAMES = ['jack', 'queen', 'king'];
-
 const SUIT_SYMBOLS = { hearts: '♥', diamonds: '♦', clubs: '♣', spades: '♠' };
-const SUIT_COLORS = { hearts: '#e74c3c', diamonds: '#3498db', clubs: '#2ecc71', spades: '#95a5a6' };
-
-function getCardImage(card) {
-  const suffix = (FACE_NAMES.includes(card.name) || (card.name === 'ace' && card.suit === 'spades')) ? '2' : '';
-  return `images/${card.name}_of_${card.suit}${suffix}.png`;
-}
 
 function getCardDisplayName(card) {
   return `${card.display}${SUIT_SYMBOLS[card.suit]}`;
 }
 
-// Spoken/announced card name for alt text and aria-label ("7 of diamonds"), since the
-// glyph form ("7♦") does not read well and the bare rank can't distinguish suits.
-function getCardAria(card) {
-  return `${card.display} of ${card.suit}`;
-}
-
-function getCardHtml(card) {
-  return `<span class="card-ref ${card.suit}">${getCardDisplayName(card)}</span>`;
-}
-
-function createDeck() {
-  let id = 0;
-  const deck = [];
-  for (const suit of SUITS) {
-    for (const def of CARD_DEFS) {
-      deck.push({ id: id++, suit, name: def.name, display: def.display, value: def.value });
-    }
-  }
-  return deck;
-}
-
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
-// Capture legality, the bot's choice and scoring live in js/rules.js (pure, unit-tested).
-const { legalCaptures, hasDirectMatch, checkMove, chooseBotMove, autoPlayMove, scoreRound, dealsPerDeck, matchWinner } = ChkobaRules;
-
-function genRoomCode() {
-  // Crypto-random, 8 chars from a 31-symbol alphabet (~8.5e11 keyspace) so room codes
-  // cannot be enumerated. Math.random() at 4 chars was ~923k and brute-forceable.
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const buf = new Uint32Array(8);
-  crypto.getRandomValues(buf);
-  let c = '';
-  for (let i = 0; i < 8; i++) c += chars[buf[i] % chars.length];
-  return c;
-}
+// Capture legality for hints and instant feedback (js/rules.js). The room checks every
+// move again: the client only saves a round trip for a move that cannot be right.
+const { legalCaptures, hasDirectMatch, checkMove } = ChkobaRules;
 
 function escapeHtml(str) {
   const d = document.createElement('div');
@@ -80,19 +17,21 @@ function escapeHtml(str) {
 
 
 // ===================== APP =====================
-// Rules, networking and the host's authority are unchanged from the previous UI. What is
-// new: every screen is a .screen section, the board is painted through a render queue
-// that derives its choreography from (previous, current) public state, the look
-// (theme / cards / suits) is a room setting the host owns, and the round-end tally is
-// a ceremony instead of a table. Wire keys keep their old names (shkobbaCount,
-// shkobbaThisTurn) so a mid-deploy client and host still understand each other.
+// The client never deals, scores or plays for a bot. A room does that (js/room.js): on
+// the game server for online games, inside this page for an offline bot game. After
+// every change the room sends a snapshot of the public state plus this seat's own
+// hand; the client paints it through a render queue that derives the choreography
+// from (previous, current), and sends back intentions over js/net.js. Wire keys keep
+// their old names (shkobbaCount, shkobbaThisTurn).
 const ROOM_OPTS_KEY = 'chkobba_room_opts';
 const NAME_KEY = 'chkobba_name';
-const BOT_SAVE_KEY = 'chkobba_bot_save';   // a bot game in progress, so a reload can resume it
-const AWAY_GRACE_MS = 3000;                // a presence gap shorter than this is a blip, not a leave
+const BOT_SAVE_KEY = 'chkobba_bot_save';   // an offline bot game, so a reload can resume it
+const SEAT_KEY = 'chkobba_seat_';          // + room code: { token, name, at } to take the same seat back
+const SEAT_KEEP_MS = 2 * 24 * 3600 * 1000; // older seat tokens are thrown away
+const ANIM_LIMIT_MS = 6000;                // no animation may hold the board longer than this
 
 const app = {
-  isHost: false,
+  isHost: false,            // this seat has lobby control: the room's creator, or the next player
   myPlayerId: -1,
   roomCode: '',
   roomLink: '',
@@ -102,57 +41,42 @@ const app = {
   winScore: 21,
   turnTimerDuration: 30,
   myName: '',
-  playerList: [],
+  snap: null,               // the latest snapshot from the room
   gameState: null,
   myHand: [],
+  net: null,                // Net.socket (online) or Net.local (bot game)
+  localRoom: null,          // the in-page room of an offline bot game
+  seatToken: '',
   selectedCardIndex: -1,
   selectedCaptureIndices: [],
   availableCaptures: [],
+  _rev: -1,
+  _helloDone: null,
+  _afterHello: null,
+  _wasDropped: false,
   _toastTimer: null,
-  _turnTimer: null,
   _turnTimerStart: 0,
   _turnKey: '',
   _timerRAF: null,
   moveLog: [],
   menuOpen: false,
   menuTab: 'stats',
-  debugTab: 'hands',
   isSubmittingMove: false,
-  _submitGuard: null,
-  botDifficulty: 'medium',
-  gameSpeed: 'normal',
   _emoteTimeout: null,
   _lastCardClickIndex: -1,
   _lastCardClickTime: 0,
   _lastTimerSec: 0,
-  _db: null,
-  _dbError: false,
   _verbose: false,
   _audioCtx: null,
   _audioUnlocked: false,
-  _roomRef: null,
-  _stateRef: null,
-  _movesRef: null,
-  _playerListeners: [],
-  _moveCallback: null,
-  _roomStarted: false,
-  _botPlayers: {},
-  _playerSlots: {},
-  _gameFrozen: false,
-  _controllingPlayerId: null,
-  _spyMode: false,
   _isBotGame: false,
-  _presence: {},
-  _presenceSeen: {},
-  _awaySince: {},
-  _awayConfirmed: [],
+  _awayUntil: {},
   _awayDismissed: {},
-  _presenceRef: null,
+  _awayTick: null,
   // render pipeline
   _shown: null,
   _renderQueued: false,
   _animating: false,
-  _idleResolvers: [],
   _pendingDealTable: false,
   _ceremonyKey: '',
   _matchKey: '',
@@ -164,9 +88,9 @@ const app = {
 
   // ========== LOGGING ==========
   // Leveled logger. error/warn always print; info/debug print only in verbose mode
-  // (debug panel open, ?debug=1, or localStorage chkoba_debug="true").
+  // (?debug=1, or localStorage chkoba_debug="true").
   log(level, ...args) {
-    if ((level === 'info' || level === 'debug') && !this._verbose && !this.debugEnabled) return;
+    if ((level === 'info' || level === 'debug') && !this._verbose) return;
     const fn = level === 'error' ? console.error
       : level === 'warn' ? console.warn
       : level === 'debug' ? console.debug
@@ -193,36 +117,24 @@ const app = {
 
     Look.init();
     this._loadOpts();
+    this._pruneSeats();
     Shader.init(document.getElementById('bg-shader'));
     Shader.start();
     Shader.setEnabled(Look.prefs.animations && Shader.wanted);
 
-    try {
-      firebase.initializeApp(firebaseConfig);
-      this._db = firebase.database();
-      // a local firebase-config.js may point at the Realtime Database emulator for testing
-      if (firebaseConfig.emulator) this._db.useEmulator(firebaseConfig.emulator.host, firebaseConfig.emulator.port);
-      else firebase.auth().signInAnonymously().catch((err) => {
-        this.log('error', 'Anonymous auth failed:', err);
-      });
-      this.log('info', 'Firebase initialized');
-    } catch (e) {
-      this.log('error', 'Firebase init failed:', e);
-      this._db = null;
-      this.showConfigError();
-    }
-
     this.bindScreens();
     this.renderMenuCards();
 
-    const code = params.get('room');
-    if (code) this.showJoin(code.toUpperCase());
+    // ?room=CODE: a reload takes the same seat back; a new link asks for a name first
+    const code = (params.get('room') || '').replace(/\s+/g, '').toUpperCase();
+    const seat = code ? this.readSeat(code) : null;
+    if (code && seat) { this.showMenu(); this.enterRoom(code, seat.name, seat.token); }
+    else if (code) this.showJoin(code);
     else this.showMenu();
     this.renderResumeOffer();
 
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
-      if (this.debugEnabled) { this.toggleDebug(); return; }
       if (this.menuOpen) { this.toggleMenu(); return; }
       const open = document.querySelector('.overlay.open');
       if (open && open.id !== 'ov-ceremony' && open.id !== 'ov-match') { this.closeOverlay(open.id); return; }
@@ -230,7 +142,10 @@ const app = {
     });
     // audio needs a gesture: the first pointer anywhere unlocks both sound engines
     document.addEventListener('pointerdown', () => { this._audioUnlocked = true; Juice.unlock(); }, { once: true });
-    window.debug = () => { this.toggleDebug(); };
+    // a phone waking up or a network coming back: reconnect now and catch up
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.wake(); });
+    window.addEventListener('online', () => this.wake());
+    window.addEventListener('pageshow', (e) => { if (e.persisted) this.wake(); });
   },
 
   _loadOpts() {
@@ -276,8 +191,10 @@ const app = {
     $('m-resume').addEventListener('click', () => this.resumeBotGame());
     $('m-discard').addEventListener('click', () => { this.clearBotSave(); this.renderResumeOffer(); });
     $('left-wait').addEventListener('click', () => this.waitForPlayer());
-    $('left-claim').addEventListener('click', () => this.claimWin());
-    $('away-claim').addEventListener('click', () => this.claimWin());
+    $('left-claim').addEventListener('click', (e) => this.awayDecision('end', e.currentTarget));
+    $('left-bot').addEventListener('click', (e) => this.awayDecision('bot', e.currentTarget));
+    $('away-claim').addEventListener('click', (e) => this.awayDecision('end', e.currentTarget));
+    $('away-bot').addEventListener('click', (e) => this.awayDecision('bot', e.currentTarget));
     document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', () => this.showScreen(b.dataset.back)));
     // join
     $('j-go').addEventListener('click', () => this.joinGame());
@@ -290,10 +207,7 @@ const app = {
     $('w-start').addEventListener('click', () => this.startGame());
     $('w-slots').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-act]'); if (!b) return;
-      const slot = +b.dataset.slot;
-      if (b.dataset.act === 'addbot') this.addBotToWaiting(slot);
-      else if (b.dataset.act === 'removebot') this.removeBotFromWaiting(slot);
-      else if (b.dataset.act === 'swap') this.swapPlayers(slot);
+      this.lobbyAction(b.dataset.act, +b.dataset.slot, b);
     });
     // options: room defaults
     this.bindSeg($('o-players'), () => this.opts.players, (v) => { this.opts.players = v; this._saveOpts(); });
@@ -383,258 +297,347 @@ const app = {
     return typed;
   },
 
-  // ========== ROOM MANAGEMENT ==========
-  createGame() {
-    if (!this._db) { this.showConfigError(); this.toast('Online play is not available'); return; }
+  // ========== ROOMS ==========
+  // The game server is this site, unless server.js points somewhere else (the copy of
+  // the page on Cloudflare Pages talks to the Worker).
+  wsUrl(code) { return (window.GAME_SERVER || location.origin).replace(/^http/, 'ws') + '/ws?room=' + code; },
+  apiUrl(path) { return (window.GAME_SERVER || '') + path; },
+
+  roomOpts() {
+    return {
+      players: +this.opts.players, winScore: +this.opts.winScore, timer: +this.opts.timer, bot: this.opts.bot, speed: this.opts.speed,
+      forceCapture: !!this.opts.forceCapture, captureAssist: !!this.opts.captureAssist, look: Look.savedLook(),
+    };
+  },
+
+  // A button that waits on the network shows it, and always comes back: on the answer,
+  // on an error or after a timeout. The lobby is repainted after, so a button that
+  // should stay off (Start in a half-empty room) is off again.
+  async busy(btn, work) {
+    if (btn && btn.classList.contains('pending')) return;
+    if (btn) { btn.disabled = true; btn.classList.add('pending'); }
+    try { return await work(); } catch (e) { this.log('error', 'action failed:', e); return null; } finally {
+      if (btn) { btn.disabled = false; btn.classList.remove('pending'); }
+      if (this.snap && !this.snap.game && !this._isBotGame) this.renderWaiting();
+    }
+  },
+
+  // A request to the room. A refusal gets a plain-words toast; a drop or a timeout
+  // asks the room for a fresh snapshot. Resolves with the ack, or null.
+  async ask(type, data) {
+    if (!this.net) return null;
+    try {
+      const ack = await this.net.emit(type, data);
+      if (!ack.ok) this.toast(this.errorText(ack));
+      return ack;
+    } catch (e) {
+      this.toast(e.message === 'timeout' ? 'The server is slow to answer, try again' : 'Not connected, try again in a moment');
+      this.resync();
+      return null;
+    }
+  },
+
+  errorText(ack) {
+    return {
+      'not-owner': 'Only the host can do that', 'not-full': 'Not enough players', away: `Waiting for ${ack.name || 'a player'} to come back`,
+      taken: 'That seat was just taken', started: 'The game has already started', 'slow-down': 'Slow down a little',
+      phase: 'Not right now', 'not-away': 'They are back',
+    }[ack.error] || 'That did not work, try again';
+  },
+
+  async createGame() {
     const name = this.readName('menu-name'); if (!name) return;
     Juice.unlock();
-    this.myName = name;
-    this.isHost = true;
-    this._isBotGame = false;
-    this.playerCount = +this.opts.players;
-    this.forceCapture = !!this.opts.forceCapture;
-    this.captureAssist = !!this.opts.captureAssist;
-    this.winScore = +this.opts.winScore;
-    this.turnTimerDuration = +this.opts.timer;
-    this.botDifficulty = this.opts.bot;
-    this.gameSpeed = this.opts.speed;
-    const look = Look.setLook(Look.savedLook(), false);
-
-    this.roomCode = genRoomCode();
-    this.myPlayerId = 0;
-    this.playerList = [this.myName];
-    this.moveLog = [];
-    this._botPlayers = {};
-    this._playerSlots = { 0: this.myName };
-    this._roomStarted = false;
-
-    this._roomRef = this._db.ref('rooms/' + this.roomCode);
-    this._roomRef.set({
-      host: this.myName,
-      playerCount: this.playerCount,
-      forceCapture: this.forceCapture,
-      captureAssist: this.captureAssist,
-      winScore: this.winScore,
-      turnTimerDuration: this.turnTimerDuration,
-      look,
-      players: { 0: this.myName },
-      started: false,
-    }).then(() => {
-      // NOTE: we deliberately do NOT arm onDisconnect().remove() on the room. onDisconnect
-      // fires on any transient drop (mobile blip, tab backgrounding), which would delete a
-      // live game on a 2-second hiccup and, since the host's next update() recreates the
-      // room without a host child, corrupt it permanently. Robust handling needs presence
-      // + a reconnect grace period + host migration (tracked in docs/AUDIT.md item 3).
-      const baseUrl = window.location.href.split('?')[0];
-      const currentParams = new URLSearchParams(window.location.search);
-      currentParams.delete('room');
-      currentParams.set('room', this.roomCode);
-      this.roomLink = baseUrl + '?' + currentParams.toString();
-      this.toast('Room ready');
-      this.log('info', 'room created', this.roomCode, '(' + this.playerCount + 'p)');
-      this._armPresence(0);
-
-      const playersRef = this._roomRef.child('players');
-      playersRef.on('value', (snap) => {
-        const players = snap.val() || {};
-        this._playerSlots = players;
-        this.playerList = [];
-        for (let i = 0; i < this.playerCount; i++) {
-          if (players[i]) this.playerList.push(players[i]);
-        }
-        if (this.playerList.length > 0 && this.playerList[0] !== this.myName) {
-          this.playerList.unshift(this.myName);
-        }
-        this.renderWaiting();
-      });
-      this._playerListeners.push(playersRef);
-
-      // Moves. Wrap the callback so a malformed payload from a client can't throw and
-      // tear down the host's move listener (which would freeze the game).
-      this._movesRef = this._roomRef.child('moves');
-      this._moveCallback = (snap) => {
-        try {
-          const move = snap.val();
-          if (!move || move.playerId === undefined) return;
-          snap.ref.remove().catch(err => this.log('warn', 'failed to clear move node:', err.message));
-          if (this._gameFrozen) {
-            this.log('debug', 'move rejected (frozen): player', move.playerId);
-            return;
-          }
-          this.log('debug', 'move received from player', move.playerId, move);
-          this.handlePlay(move);
-        } catch (e) {
-          this.log('error', 'move handler threw:', e);
-        }
-      };
-      this._movesRef.orderByChild('ts').on('child_added', this._moveCallback);
-      this._playerListeners.push(this._movesRef);
-
-      this.showWaiting();
-    }).catch((err) => {
-      this.log('error', 'room creation failed:', err);
-      this.toast('Could not create the room: ' + err.message);
+    await this.busy(document.getElementById('m-create'), async () => {
+      let code = '';
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 8000);
+      try {
+        const res = await fetch(this.apiUrl('/api/rooms'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ opts: this.roomOpts() }), signal: ctl.signal,
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.code) throw new Error(body.error || 'HTTP ' + res.status);
+        code = body.code;
+      } catch (e) {
+        this.log('error', 'room creation failed:', e.message);
+        this.toast('Could not create the room. Check your connection and try again.');
+        return;
+      } finally {
+        clearTimeout(timer);
+      }
+      this.log('info', 'room created', code);
+      await this.enterRoom(code, name, '');
     });
   },
 
-  joinGame() {
-    if (!this._db) { this.showConfigError(); this.toast('Online play is not available'); return; }
-    const code = document.getElementById('j-code').value.trim().toUpperCase();
+  async joinGame() {
+    const code = document.getElementById('j-code').value.replace(/\s+/g, '').toUpperCase();
     if (!code) { this.toast('Enter the room code'); return; }
-    const name = this.readName('j-name'); if (!name) return;
+    if (!ChkobaRoom.isRoomCode(code)) { this.toast('A room code is 8 letters and digits'); return; }
+    const seat = this.readSeat(code);
+    const name = this.readName('j-name', seat ? seat.name : ''); if (!name) return;
     Juice.unlock();
+    await this.busy(document.getElementById('j-go'), () => this.enterRoom(code, name, seat ? seat.token : ''));
+  },
+
+  // Opens the room's socket and takes a seat, or the same seat again with its token.
+  // Resolves once the room has answered (or after a while), so the button that started
+  // it comes back either way.
+  enterRoom(code, name, token) {
+    this.closeRoom();
     this.roomCode = code;
     this.myName = name;
-    this.isHost = false;
+    this.seatToken = token || '';
     this._isBotGame = false;
-    this.moveLog = [];
-
-    this._roomRef = this._db.ref('rooms/' + this.roomCode);
-
-    this._roomRef.once('value').then((snap) => {
-      const room = snap.val();
-      if (!room || !room.host) { this.toast('Room not found'); return; }
-      // A slot freed by a dropped player must not let a newcomer into a running game,
-      // but the player who dropped may take their own seat back (same name, seat offline).
-      let rejoinSlot = -1;
-      if (room.started) {
-        const pres = room.presence || {};
-        const seats = room.state && room.state.players ? room.state.players : [];
-        const seat = seats.find((p) => p && p.id !== 0 && !p.isBot && p.name === name && !pres[p.id]);
-        if (!seat) { this.toast('That game has already started'); return; }
-        rejoinSlot = seat.id;
-      }
-      const playerCount = room.playerCount || 2;
-      this.playerCount = playerCount;
-      this.forceCapture = room.forceCapture !== false;
-      this.captureAssist = !!room.captureAssist;
-      this.winScore = room.winScore || 21;
-      this.turnTimerDuration = room.turnTimerDuration || 0;
-      Look.setLook(room.look || Look.DEFAULT_LOOK, false);
-
-      // Claim the first free slot atomically. The transaction callback must be pure and
-      // re-entrant (Firebase may run it several times), so it recomputes the slot from
-      // the current value each run; claimedSlot holds the slot of the committing run.
-      let claimedSlot = -1;
-      this._roomRef.child('players').transaction((players) => {
-        players = players || {};
-        let slot = -1;
-        if (rejoinSlot >= 0) {
-          if (!players[rejoinSlot] || players[rejoinSlot] === this.myName) slot = rejoinSlot;
-        } else {
-          for (let i = 0; i < playerCount; i++) {
-            if (!players[i]) { slot = i; break; }
-          }
-        }
-        if (slot < 0) { claimedSlot = -1; return; } // abort: room full
-        claimedSlot = slot;
-        players[slot] = this.myName;
-        return players;
-      }, (err, committed) => {
-        if (err) { this.log('error', 'slot-claim transaction failed:', err); this.toast('Could not join: ' + err.message); return; }
-        if (!committed || claimedSlot < 0) { this.log('info', 'join rejected: room full'); this.toast('Room is full'); return; }
-
-        const myId = claimedSlot;
-        this.myPlayerId = myId;
-        this.log('info', 'joined room', this.roomCode, 'as player', myId);
-        // Free our slot if we disconnect, so a refresh/drop doesn't leave a ghost that
-        // blocks rejoining or stalls turn rotation.
-        this._roomRef.child('players/' + myId).onDisconnect().remove();
-        this._armPresence(myId);
-        this.toast(rejoinSlot >= 0 ? 'Back in the game' : 'Joined');
-        this.roomLink = window.location.href.split('?')[0] + '?room=' + this.roomCode;
-
-        const stateRef = this._roomRef.child('state');
-        stateRef.on('value', (s) => {
-          try {
-            const state = s.val();
-            if (state) this.handleStateUpdate(state);
-          } catch (e) {
-            this.log('error', 'state update handler threw:', e);
-          }
-        }, (err) => this.log('error', 'state listener cancelled:', err.message));
-        this._playerListeners.push(stateRef);
-
-        const handRef = this._roomRef.child('hand_' + myId);
-        handRef.on('value', (s) => {
-          try {
-            this.myHand = s.val() || [];
-            this.log('debug', 'hand updated:', this.myHand.length, 'cards');
-            if (this.gameState) this.renderGame();
-          } catch (e) {
-            this.log('error', 'hand update handler threw:', e);
-          }
-        }, (err) => this.log('error', 'hand listener cancelled:', err.message));
-        this._playerListeners.push(handRef);
-
-        const logRef = this._roomRef.child('log');
-        logRef.on('value', (s) => {
-          const log = s.val();
-          if (log) { this.moveLog = log.slice(-50); if (this.menuOpen && this.menuTab === 'log') this.renderMenuContent(); }
-        });
-        this._playerListeners.push(logRef);
-
-        const emoteRef = this._roomRef.child('emote');
-        emoteRef.on('value', (s) => {
-          const e = s.val();
-          if (e && e.name && e.text) this.showEmote(e.name, e.text);
-        });
-        this._playerListeners.push(emoteRef);
-
-        // Detect the host leaving WITHOUT subscribing to the whole room node (that streamed
-        // every player's private hand_* to every client). The host child is set once at
-        // creation and removed when the host leaves.
-        const hostRef = this._roomRef.child('host');
-        hostRef.on('value', (s) => {
-          if (!s.val() && this.gameState) {
-            this.log('info', 'host left, returning to the menu');
-            this.toast('The host left, the game is over');
-            this.backToLobby();
-          }
-        });
-        this._playerListeners.push(hostRef);
-
-        const joinPlayersRef = this._roomRef.child('players');
-        joinPlayersRef.on('value', (snap) => {
-          const pdata = snap.val() || {};
-          this._playerSlots = pdata;
-          this.playerList = [];
-          for (let i = 0; i < playerCount; i++) if (pdata[i]) this.playerList.push(pdata[i]);
-          if (!this.gameState) this.renderWaiting();
-        });
-        this._playerListeners.push(joinPlayersRef);
-
-        // a rejoin may already have painted the running game from the cached state
-        if (!this.gameState) this.showWaiting();
-      });
-    }).catch((err) => {
-      this.log('error', 'join failed (room read):', err);
-      this.toast('Could not join: ' + err.message);
+    this._wasDropped = false;
+    this.roomLink = location.origin + '/?room=' + code;
+    this._setUrlRoom(code);
+    if (!token) this.showWaiting();
+    else this.toast('Joining the game');
+    const net = Net.socket(this.wsUrl(code));
+    this.net = net;
+    this.bindNet(net);
+    return new Promise((resolve) => {
+      this._helloDone = resolve;
+      setTimeout(resolve, 12000);
     });
+  },
+
+  bindNet(net) {
+    const live = (fn) => (...a) => { if (this.net === net) fn(...a); };
+    net.on('open', live(() => this.sayHello()));
+    net.on('state', live((m) => this.applySnapshot(m.s)));
+    net.on('notice', live((m) => { this.toast(m.text); if (/ran out of time/.test(m.text)) this.playSound('timeout'); }));
+    net.on('emote', live((m) => this.showEmote(m.name, m.text)));
+    net.on('status', live((s) => this.renderNet(s)));
+    net.on('timeout', live(() => this.resync()));
+    net.on('fatal', live((why) => this.roomLost(why)));
+  },
+
+  async sayHello() {
+    const net = this.net;
+    this._rev = -1;   // a new socket: take whatever the room sends next as current
+    let ack;
+    try { ack = await net.emit('hello', { name: this.myName, token: this.seatToken }); } catch (e) { return; }   // dropped again: the next 'open' says hello again
+    if (this.net !== net) return;
+    const done = this._helloDone; this._helloDone = null;
+    if (!ack.ok) {
+      const why = { full: 'Room is full', started: 'That game has already started', name: 'Enter your name first' }[ack.error] || 'Could not join the room';
+      const code = this.roomCode;
+      if (this.seatToken) this.forgetSeat(code);
+      this.closeRoom();
+      this._setUrlRoom('');
+      this.toast(why);
+      this.showJoin(code);
+      if (done) done();
+      return;
+    }
+    const resumed = !!ack.resumed;
+    this.seatToken = ack.token;
+    this.myPlayerId = ack.seat;
+    if (!this._isBotGame) this.rememberSeat(this.roomCode, { token: ack.token, name: this.myName, at: Date.now() });
+    if (this._wasDropped) this.toast('Reconnected');
+    else if (resumed && !this._isBotGame) this.toast('Back in the game');
+    this._wasDropped = false;
+    this.log('info', 'seated in', this.roomCode, 'as', ack.seat, resumed ? '(resumed)' : '');
+    if (done) done();
+    if (this._afterHello) { const next = this._afterHello; this._afterHello = null; next().catch((e) => this.log('error', 'bot game setup failed:', e)); }
+  },
+
+  // Asks the room for a full snapshot: after a timeout, a refused move, or waking up.
+  resync() {
+    if (this.net && this.net.status === 'open') this.net.emit('sync').catch(() => {});
+  },
+
+  wake() {
+    if (!this.net) return;
+    this.net.wake();
+    this.resync();
+  },
+
+  // The room is gone or refused this browser for good.
+  roomLost(why) {
+    const text = {
+      'not-found': 'That room does not exist anymore', replaced: 'This game is open in another tab',
+      closed: 'The room has closed', unreachable: 'Could not reach the game server. Check your connection.',
+    }[why] || 'Connection lost';
+    const code = this.roomCode;
+    if (why === 'not-found' || why === 'closed') this.forgetSeat(code);
+    const done = this._helloDone; this._helloDone = null;
+    this.closeRoom();
+    this._setUrlRoom('');
+    this.toast(text);
+    if (why === 'unreachable' && code) this.showJoin(code); else this.showMenu();
+    this.renderResumeOffer();
+    if (done) done();
+  },
+
+  // Forgets the room on this side only: closes the socket or stops the in-page room.
+  closeRoom() {
+    const net = this.net;
+    this.net = null;
+    if (net) net.close();
+    if (this.localRoom) { this.localRoom.destroy(); this.localRoom = null; }
+    this.snap = null; this._rev = -1;
+    this.gameState = null; this._shown = null; this.myHand = []; this.myPlayerId = -1; this.isHost = false;
+    this.selectedCardIndex = -1; this.selectedCaptureIndices = []; this.availableCaptures = [];
+    this.isSubmittingMove = false; this._afterHello = null;
+    this.moveLog = []; this._awayUntil = {}; this._awayDismissed = {};
+    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
+    this.stopTurnTimer();
+    this.closeAllOverlays();
+    this.renderAway();
+    this.renderNet('');
+  },
+
+  // Leaving on purpose: the room is told (a lobby seat is freed; in a game the others
+  // are asked what to do), the seat token is forgotten, and a bot game ends for good.
+  leaveRoom() {
+    const net = this.net;
+    if (net) {
+      this.net = null;
+      const bye = () => net.close();
+      net.emit('leave').then(bye, bye);
+      setTimeout(bye, 1500);
+    }
+    if (this.roomCode && !this._isBotGame) this.forgetSeat(this.roomCode);
+    if (this._isBotGame) this.clearBotSave();
+    this.closeRoom();
+    this._isBotGame = false;
+    this.roomCode = '';
+    this.roomLink = '';
+    this._setUrlRoom('');
+    this.showMenu();
+    this.renderResumeOffer();
+  },
+  backToLobby() { this.leaveRoom(); },
+
+  // ---- seat tokens: one per room, so a reload resumes the same seat and hand ----
+  readSeat(code) {
+    try {
+      const v = JSON.parse(localStorage.getItem(SEAT_KEY + code) || 'null');
+      return v && typeof v.token === 'string' ? v : null;
+    } catch (e) { return null; }
+  },
+  rememberSeat(code, v) { try { localStorage.setItem(SEAT_KEY + code, JSON.stringify(v)); } catch (e) { /* private mode: no resume */ } },
+  forgetSeat(code) { try { localStorage.removeItem(SEAT_KEY + code); } catch (e) { /* ignore */ } },
+  _pruneSeats() {
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (!k || !k.startsWith(SEAT_KEY)) continue;
+        const v = JSON.parse(localStorage.getItem(k) || 'null');
+        if (!v || !v.at || Date.now() - v.at > SEAT_KEEP_MS) localStorage.removeItem(k);
+      }
+    } catch (e) { /* ignore */ }
+  },
+  _setUrlRoom(code) {
+    try {
+      const u = new URL(location.href);
+      if (code) u.searchParams.set('room', code); else u.searchParams.delete('room');
+      history.replaceState(null, '', u.pathname + u.search + u.hash);
+    } catch (e) { /* ignore */ }
+  },
+
+  // ========== SNAPSHOTS ==========
+  // Everything on screen comes from here: the public state, my hand, the seats.
+  applySnapshot(s) {
+    if (!s || typeof s.rev !== 'number' || s.rev <= this._rev) return;   // older than what is shown
+    this._rev = s.rev;
+    this.snap = s;
+    this.myPlayerId = s.you;
+    this.isHost = s.owner === s.you;
+    this.playerCount = s.opts.players;
+    this.forceCapture = s.opts.forceCapture;
+    this.captureAssist = s.opts.captureAssist;
+    this.winScore = s.opts.winScore;
+    this.turnTimerDuration = s.opts.timer;
+    this.moveLog = s.log || [];
+    const now = Date.now();
+    s.seats.forEach((x) => { if (x && x.away) this._awayUntil[x.id] = now + x.away.holdLeft; else if (x) { delete this._awayUntil[x.id]; delete this._awayDismissed[x.id]; } });
+    Look.setLook(s.game ? s.game.look : s.opts.look, false);
+    if (!s.game) {
+      if (this.gameState) { this.gameState = null; this._shown = null; this.closeAllOverlays(); this.stopTurnTimer(); }
+      this.myHand = [];
+      if (!this._isBotGame) this.showWaiting();   // a bot game sits in the lobby for one tick only
+    } else {
+      this.handleStateUpdate(s.game, s.hand);
+    }
+    if (this.menuOpen) this.renderMenuContent();
+    document.getElementById('match-again').hidden = !this.isHost;   // the host may have changed
+    this.renderAway();
+  },
+
+  handleStateUpdate(data, hand) {
+    const oldState = this.gameState;
+    const turnChanged = !oldState || oldState.currentTurn !== data.currentTurn || oldState.moveSeq !== data.moveSeq || oldState.gameToken !== data.gameToken;
+    this.gameState = {
+      ...data,
+      lastMove: data.lastMove ? { ...data.lastMove, taken: data.lastMove.taken || [] } : null,
+      nextDealerTurn: data.nextDealerTurn !== -1 ? data.nextDealerTurn : undefined,
+    };
+    this.myHand = hand || [];
+    if (turnChanged) {
+      this.selectedCardIndex = -1;
+      this.selectedCaptureIndices = [];
+      this.availableCaptures = [];
+      // a tap from the previous turn must not pair with this turn's first tap as a double tap
+      this._lastCardClickIndex = -1;
+    }
+    // the turn clock: the room says how much is left, this browser counts it down
+    const total = (data.turnTimerDuration || 0) * 1000;
+    if (total > 0 && data.turnMsLeft > 0) this._turnTimerStart = Date.now() - (total - data.turnMsLeft);
+    else if (turnChanged) this._turnTimerStart = Date.now();
+    if (oldState && oldState.phase !== 'finished' && data.phase === 'finished') this.playSound('win');
+    this.renderGame();
+    if (data.phase === 'playing' && data.currentTurn >= 0) this.startTurnTimer();
+    else this.stopTurnTimer();
+  },
+
+  // The seat this browser plays.
+  activeId() { return this.myPlayerId; },
+
+  // A small banner while the socket is down; the snapshot after the reconnect catches up.
+  renderNet(status) {
+    const el = document.getElementById('net-banner');
+    if (status === 'reconnecting') this._wasDropped = true;
+    el.hidden = !(this.snap && (status === 'reconnecting' || status === 'connecting'));
   },
 
   // ========== WAITING ROOM ==========
   renderWaiting() {
     const $ = (id) => document.getElementById(id);
+    const s = this.snap;
     $('w-code').textContent = this.roomCode;
     $('w-link').textContent = this.roomLink;
-    $('w-sub').textContent = this.isHost ? 'share the code or the link' : 'joined as ' + this.myName;
-    const slots = this._playerSlots || {};
+    const btn = $('w-start');
+    if (!s) {
+      $('w-sub').textContent = 'share the code or the link';
+      $('w-slots').innerHTML = '';
+      $('w-note').textContent = 'connecting to the room';
+      btn.hidden = true;
+      return;
+    }
+    const me = s.seats[s.you];
+    $('w-sub').textContent = this.isHost ? 'share the code or the link' : 'joined as ' + (me ? me.name : this.myName);
     const box = $('w-slots'); box.innerHTML = '';
-    const n = this.playerCount;
+    const n = s.opts.players;
     const order = n === 4 ? [0, 2, 1, 3] : [0, 1];   // teams read as columns: team 1 left, team 2 right
     order.forEach((slot) => {
       const d = document.createElement('div');
       const team = n === 4 ? (slot % 2) + 1 : slot + 1;
-      const who = slots[slot];
+      const who = s.seats[slot];
       d.className = `slot t${team}${who ? '' : ' empty'}`;
       if (who) {
-        const isBot = !!this._botPlayers[slot];
         const btns = [];
-        if (this.isHost && isBot) btns.push(`<button class="pill sm ghost" data-act="removebot" data-slot="${slot}" title="Remove bot">✕</button>`);
-        if (this.isHost && n === 4 && slot !== 0) btns.push(`<button class="pill sm ghost" data-act="swap" data-slot="${slot}" title="Swap team">⇄</button>`);
-        d.innerHTML = `<div class="av">${isBot ? 'BOT' : escapeHtml(who.charAt(0).toUpperCase())}</div>
-          <div class="who">${isBot ? '<span class="bot">bot</span>' : ''}${escapeHtml(who)}${slot === this.myPlayerId ? ' (you)' : ''}<small>${n === 4 ? `Team ${team}` : slot === 0 ? 'host' : 'guest'}</small></div>
+        if (this.isHost && who.bot) btns.push(`<button class="pill sm ghost" data-act="removebot" data-slot="${slot}" aria-label="Remove ${escapeHtml(who.name)}">✕</button>`);
+        if (this.isHost && n === 4) btns.push(`<button class="pill sm ghost" data-act="swap" data-slot="${slot}" aria-label="Move ${escapeHtml(who.name)} to the other team">⇄</button>`);
+        const role = n === 4 ? `Team ${team}` : slot === s.owner ? 'host' : who.bot ? 'bot' : 'guest';
+        const extra = (n === 4 && slot === s.owner ? ' · host' : '') + (who.connected ? '' : ' · reconnecting');
+        d.innerHTML = `<div class="av">${who.bot ? 'BOT' : escapeHtml(who.name.charAt(0).toUpperCase())}</div>
+          <div class="who">${who.bot ? '<span class="bot">bot</span>' : ''}${escapeHtml(who.name)}${slot === s.you ? ' (you)' : ''}<small>${role}${extra}</small></div>
           <div class="btns">${btns.join('')}</div>`;
       } else if (this.isHost) {
         d.innerHTML = `<span>empty</span><div class="btns"><button class="pill sm chip" data-act="addbot" data-slot="${slot}">+ bot</button></div>`;
@@ -643,271 +646,141 @@ const app = {
       }
       box.appendChild(d);
     });
-
-    const filled = order.filter((s) => slots[s]).length;
-    const remaining = n - filled;
-    const btn = $('w-start');
+    const remaining = s.seats.filter((x) => !x).length;
     btn.hidden = !this.isHost;
-    if (this.isHost) {
-      btn.disabled = remaining > 0 || this._roomStarted;
-      btn.textContent = this._roomStarted ? 'Starting' : 'Start';
-    }
-    $('w-note').textContent = this.isHost
-      ? (remaining > 0 ? `waiting for ${remaining} more player${remaining !== 1 ? 's' : ''}` : 'everyone is here')
-      : 'the host starts the game';
+    if (this.isHost && !btn.classList.contains('pending')) btn.disabled = remaining > 0;
+    $('w-note').textContent = remaining > 0
+      ? `waiting for ${remaining} more player${remaining !== 1 ? 's' : ''}`
+      : this.isHost ? 'everyone is here' : 'the host starts the game';
   },
 
-  swapPlayers(slot) {
-    if (!this.isHost || this.playerCount !== 4 || slot === 0) return;
-    const target = slot === 2 ? 1 : 2;
-    this._roomRef.child('players').transaction(current => {
-      if (!current) return current;
-      const p = {};
-      for (let i = 0; i < 4; i++) if (current[i]) p[i] = current[i];
-      if (!p[slot] || !p[target]) return;
-      const tmp = p[slot];
-      p[slot] = p[target];
-      p[target] = tmp;
-      return p;
-    }, (err, committed) => {
-      if (!err && committed) {
-        const slotBot = this._botPlayers[slot];
-        const targetBot = this._botPlayers[target];
-        delete this._botPlayers[slot];
-        delete this._botPlayers[target];
-        if (slotBot) this._botPlayers[target] = slotBot;
-        if (targetBot) this._botPlayers[slot] = targetBot;
-      }
-    });
+  lobbyAction(act, slot, btn) {
+    const type = { addbot: 'addBot', removebot: 'removeBot', swap: 'swap' }[act];
+    if (type) this.busy(btn, () => this.ask(type, { slot }));
   },
+
+  startGame() { this.busy(document.getElementById('w-start'), () => this.ask('start')); },
 
   copyRoomLink() {
-    if (!this.roomLink) { this.toast('No room link in a bot game'); return; }
-    navigator.clipboard.writeText(this.roomLink).then(() => {
-      this.toast('Link copied');
-    }).catch(() => {
-      this.toast('Share this link: ' + this.roomLink);
-    });
+    const link = this.roomLink;
+    if (!link) { this.toast('No room link in a bot game'); return; }
+    const fallback = () => {
+      // no clipboard API (plain http on a LAN): select-and-copy, else show the link
+      const ta = document.createElement('textarea');
+      ta.value = link; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      ta.remove();
+      this.toast(ok ? 'Link copied' : 'Share this link: ' + link);
+    };
+    if (!navigator.clipboard || !navigator.clipboard.writeText) { fallback(); return; }
+    navigator.clipboard.writeText(link).then(() => this.toast('Link copied'), fallback);
   },
 
-  leaveRoom() {
-    this.cleanupListeners();
-    this.releaseRoom();
-    this._roomRef = null;
-    this._stateRef = null;
-    this._movesRef = null;
-    this.gameState = null;
-    this.myHand = [];
-    this.playerList = [];
-    this._botPlayers = {};
-    this._playerSlots = {};
-    this._roomStarted = false;
-    this.stopTurnTimer();
-    this.showMenu();
-  },
-
-  backToLobby() {
-    this.cleanupListeners();
-    this.releaseRoom();
-    this._roomRef = null;
-    this._stateRef = null;
-    this._movesRef = null;
-    this.gameState = null;
-    this._shown = null;
-    this.myHand = [];
-    this.selectedCardIndex = -1;
-    this.selectedCaptureIndices = [];
-    this.availableCaptures = [];
-    this.moveLog = [];
-    this.playerList = [];
-    this._botPlayers = {};
-    this._playerSlots = {};
-    this._roomStarted = false;
-    this._isBotGame = false;
-    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
-    this.stopTurnTimer();
-    this.closeAllOverlays();
-    // leaving on purpose ends a bot game for good; only a reload or a closed tab keeps it
-    this.clearBotSave();
-    this.showMenu();
-    this.renderResumeOffer();
-  },
-
-  cleanupListeners() {
-    this._playerListeners.forEach(ref => { if (ref) ref.off(); });
-    this._playerListeners = [];
-    this._moveCallback = null;
-  },
-
-  // Release our presence on a clean exit: the host deletes the room; a player frees its
-  // own slot. Cancel the matching onDisconnect first so it can't fire later on a node we
-  // already removed.
-  releaseRoom() {
-    if (!this._roomRef) return;
-    if (this._presenceRef) {
-      this._presenceRef.onDisconnect().cancel();
-      this._presenceRef.remove().catch(() => {});
-      this._presenceRef = null;
-    }
-    this._resetPresence();
-    if (this.isHost) {
-      this._roomRef.remove().catch(() => {});
-    } else if (this.myPlayerId >= 0) {
-      const slotRef = this._roomRef.child('players/' + this.myPlayerId);
-      slotRef.onDisconnect().cancel();
-      slotRef.remove().catch(() => {});
-    }
-  },
-
-  showConfigError() {
-    this._dbError = true;
-    const banner = document.getElementById('config-error');
-    if (banner) banner.hidden = false;
-    ['m-create', 'j-go'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
-  },
-
-  // ========== PRESENCE (online rooms) ==========
-  // Every human seat keeps rooms/<code>/presence/<slot> = true while its tab is
-  // connected; onDisconnect removes it and .info/connected re-arms it after a network
-  // blip. Everyone watches the whole presence node: a seat that was seen and then
-  // stays gone longer than AWAY_GRACE_MS counts as having left. The host is then
-  // offered to wait (the player can rejoin with the same name) or to claim the win.
-  _armPresence(slot) {
-    if (!this._db || !this._roomRef) return;
-    const room = this._roomRef;
-    const ref = room.child('presence/' + slot);
-    this._presenceRef = ref;
-    const conn = this._db.ref('.info/connected');
-    conn.on('value', (snap) => {
-      if (snap.val() !== true || this._roomRef !== room) return;
-      ref.onDisconnect().remove()
-        .then(() => ref.set(true))
-        .catch((err) => this.log('warn', 'presence write failed:', err.message));
-      // a guest's seat is freed by onDisconnect: a reconnect must put it back
-      if (!this.isHost && this.myName) {
-        const seat = room.child('players/' + slot);
-        seat.onDisconnect().remove();
-        seat.set(this.myName).catch(() => {});
-      }
-    });
-    this._playerListeners.push(conn);
-    const all = room.child('presence');
-    all.on('value', (snap) => {
-      this._presence = snap.val() || {};
-      Object.keys(this._presence).forEach((k) => { this._presenceSeen[k] = true; });
-      this._checkPresence();
-    });
-    this._playerListeners.push(all);
-  },
-
-  _resetPresence() {
-    Object.values(this._awaySince).forEach((v) => clearTimeout(v.timer));
-    this._presence = {}; this._presenceSeen = {}; this._awaySince = {}; this._awayConfirmed = []; this._awayDismissed = {};
-    const ov = document.getElementById('ov-left'); if (ov) ov.classList.remove('open');
-    const b = document.getElementById('away-banner'); if (b) b.hidden = true;
-  },
-
-  _checkPresence() {
-    const gs = this.gameState;
-    if (!gs || !gs.players || this._isBotGame || !this._roomRef) return;
-    const live = gs.phase === 'playing' || gs.phase === 'round_end';
-    const now = Date.now();
-    const missing = live ? gs.players.filter((p) => p.id !== this.myPlayerId && !p.isBot && !this.isBotPlayer(p.id)
-      && this._presenceSeen[p.id] && !this._presence[p.id]) : [];
-    const missingIds = missing.map((p) => p.id);
-    // players who came back
-    Object.keys(this._awaySince).forEach((k) => {
-      const id = +k;
-      if (missingIds.includes(id)) return;
-      clearTimeout(this._awaySince[k].timer);
-      delete this._awaySince[k];
-      delete this._awayDismissed[id];
-      if (this._awayConfirmed.includes(id)) {
-        const p = gs.players[id];
-        this.toast(`${p ? p.name : 'A player'} is back`);
-      }
-    });
-    missing.forEach((p) => {
-      if (!this._awaySince[p.id]) this._awaySince[p.id] = { at: now, timer: setTimeout(() => this._checkPresence(), AWAY_GRACE_MS + 50) };
-    });
-    this._awayConfirmed = missing.filter((p) => now - this._awaySince[p.id].at >= AWAY_GRACE_MS).map((p) => p.id);
-    this.renderAway();
-  },
-
+  // ========== A PLAYER AWAY ==========
+  // A dropped player keeps their seat for 60 s (a banner counts it down). After that the
+  // others choose: wait, let a bot play the seat, or end the game. A player who comes
+  // back with the same link always gets the seat, and the hand, back.
   renderAway() {
-    const gs = this.gameState;
-    const ids = gs ? this._awayConfirmed : [];
-    const banner = document.getElementById('away-banner');
-    const ov = document.getElementById('ov-left');
-    if (!ids.length) { banner.hidden = true; ov.classList.remove('open'); return; }
-    const names = ids.map((id) => (gs.players[id] ? gs.players[id].name : 'A player'));
-    const who = names.join(' and ');
-    const hostGone = ids.includes(0) && !this.isHost;
+    const s = this.snap, gs = this.gameState;
+    const banner = document.getElementById('away-banner'), ov = document.getElementById('ov-left');
+    clearTimeout(this._awayTick); this._awayTick = null;
+    const live = !!s && !!gs && (gs.phase === 'playing' || gs.phase === 'round_end') && !this._isBotGame;
+    const gone = live ? s.seats.filter((x) => x && x.away && x.id !== s.you && !x.takeover) : [];
+    if (!gone.length) { banner.hidden = true; ov.classList.remove('open'); return; }
+    const names = (list) => list.map((x) => x.name).join(' and ');
+    const expired = gone.filter((x) => x.away.expired);
+    const holding = gone.filter((x) => !x.away.expired);
+    const botBtn = document.getElementById('away-bot'), claimBtn = document.getElementById('away-claim');
     banner.hidden = false;
-    document.getElementById('away-text').textContent = hostGone
-      ? `The host (${names[ids.indexOf(0)]}) lost connection, waiting for them`
-      : `${who} left the game${this.isHost ? '' : ', waiting for them to come back'}`;
-    document.getElementById('away-claim').hidden = !this.isHost;
-    if (!this.isHost) return;
-    // the host is asked once per leave; after "wait" the banner keeps the claim button
-    const fresh = ids.some((id) => !this._awayDismissed[id]);
-    if (!fresh) return;
-    const me = gs.players.find((p) => p.id === this.myPlayerId);
-    const ownTeamLeft = !!me && ids.every((id) => gs.players[id].team === me.team);
-    const verb = ownTeamLeft ? 'End the game' : 'Claim the win';
-    document.getElementById('left-title').textContent = `${who} left the game`;
-    document.getElementById('left-text').textContent = `They can rejoin with the same name and room code. Wait for them, or ${verb.toLowerCase()}.`;
-    document.getElementById('left-claim').textContent = verb;
-    document.getElementById('away-claim').textContent = verb;
-    ov.classList.add('open');
+    if (expired.length) {
+      const me = gs.players[s.you];
+      const ownTeam = !!me && expired.every((x) => gs.players[x.id].team === me.team);
+      const verb = ownTeam ? 'End the game' : 'Claim the win';
+      document.getElementById('away-text').textContent = `${names(expired)} left the game`;
+      claimBtn.textContent = verb; claimBtn.hidden = false; botBtn.hidden = false;
+      document.getElementById('left-title').textContent = `${names(expired)} left the game`;
+      document.getElementById('left-text').textContent = `Let a bot play their cards, or ${verb.toLowerCase()}. If they open the same link again, they get their seat back.`;
+      document.getElementById('left-claim').textContent = verb;
+      if (expired.some((x) => !this._awayDismissed[x.id])) ov.classList.add('open');
+      return;
+    }
+    ov.classList.remove('open');
+    claimBtn.hidden = true; botBtn.hidden = true;
+    const until = Math.max(...holding.map((x) => this._awayUntil[x.id] || 0));
+    const secs = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+    document.getElementById('away-text').textContent = `${names(holding)} lost connection. Keeping the seat for ${secs}s`;
+    this._awayTick = setTimeout(() => this.renderAway(), 1000);
   },
 
   waitForPlayer() {
-    this._awayConfirmed.forEach((id) => { this._awayDismissed[id] = true; });
+    if (this.snap) this.snap.seats.forEach((x) => { if (x && x.away && x.away.expired) this._awayDismissed[x.id] = true; });
     this.closeOverlay('ov-left');
-    this.toast('Waiting: they can rejoin with the same name');
+    this.toast('Waiting: they can come back with the same link');
   },
 
-  // The side that is still here wins by forfeit.
-  claimWin() {
-    const gs = this.gameState;
+  // 'bot': a bot plays the gone seats until their players come back.
+  // 'end': the side that is still here wins by forfeit.
+  awayDecision(action, btn) {
+    const s = this.snap;
+    if (!s) return;
+    const gone = s.seats.filter((x) => x && x.away && x.away.expired && x.id !== s.you && !x.takeover);
+    if (!gone.length) return;
     this.closeOverlay('ov-left');
-    if (!this.isHost || !gs || !this._awayConfirmed.length) return;
-    if (gs.phase !== 'playing' && gs.phase !== 'round_end') return;
-    const leaver = gs.players[this._awayConfirmed[0]];
-    gs.phase = 'finished';
-    gs.winner = leaver.team === 0 ? 1 : 0;
-    gs.endReason = 'forfeit';
-    gs.currentTurn = -1;
-    this.stopTurnTimer();
-    this.addLogEntry(`${leaver.name} left, Team ${gs.winner + 1} wins by forfeit`);
-    this.playSound('win');
-    this.broadcastGameState();
-    this.renderGame();
-    this._checkPresence();
+    const targets = action === 'bot' ? gone : gone.slice(0, 1);
+    this.busy(btn, async () => { for (const x of targets) await this.ask('away', { seat: x.id, action }); });
   },
 
-  // ========== BOT GAME SAVE ==========
-  // The host of a bot game holds the only copy of its state, so it is kept in
-  // localStorage after every broadcast and offered back on the next visit.
-  saveBotGame() {
-    const gs = this.gameState;
-    if (!this._isBotGame || !gs) return;
-    if (gs.phase === 'finished') { this.clearBotSave(); return; }
+  // ========== PLAY VS BOT (offline) ==========
+  // A bot game is a room like any other, run inside this page: the same referee and
+  // the same snapshots, no network at all. It is saved after every change so a reload
+  // or a closed tab can resume it.
+  playVsBot() {
+    const name = this.readName('menu-name', 'Player'); if (!name) return;
+    Juice.unlock();
+    const room = new ChkobaRoom.Room({ ...this.roomOpts(), players: 2, code: 'BOT' }, this.localEnv());
+    this.startLocalRoom(room, name, '');
+    this._afterHello = async () => {
+      const net = this.net;
+      if (!net) return;
+      await net.emit('addBot', { slot: 1, level: this.opts.bot });
+      await net.emit('start');
+    };
+  },
+
+  localEnv() {
+    return { onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
+  },
+
+  startLocalRoom(room, name, token) {
+    this.closeRoom();
+    this._isBotGame = true;
+    this.localRoom = room;
+    this.roomCode = 'BOT';
+    this.roomLink = '';
+    this.myName = name;
+    this.seatToken = token || '';
+    this._setUrlRoom('');
+    const net = Net.local(room);
+    this.net = net;
+    this.bindNet(net);
+  },
+
+  saveBotGame(room) {
+    if (room !== this.localRoom || !room.gs) return;
+    if (room.gs.phase === 'finished') { this.clearBotSave(); return; }
     try {
-      localStorage.setItem(BOT_SAVE_KEY, JSON.stringify({
-        v: 1, savedAt: Date.now(), myName: this.myName, botDifficulty: this.botDifficulty, gameSpeed: this.gameSpeed,
-        playerList: this.playerList, moveLog: this.moveLog.slice(-50), gameState: gs,
-      }));
+      localStorage.setItem(BOT_SAVE_KEY, JSON.stringify({ v: 2, savedAt: Date.now(), name: this.myName, room: room.serialize() }));
     } catch (e) { /* private mode or full storage: the game just cannot be resumed */ }
   },
 
   readBotSave() {
     try {
       const save = JSON.parse(localStorage.getItem(BOT_SAVE_KEY) || 'null');
-      const gs = save && save.gameState;
-      if (!save || save.v !== 1 || !gs || !Array.isArray(gs.hands) || !Array.isArray(gs.deck) || !Array.isArray(gs.players)) return null;
-      if (gs.phase === 'finished') return null;
+      const gs = save && save.room && save.room.gs;
+      if (!save || save.v !== 2 || !gs || !Array.isArray(gs.hands) || !Array.isArray(gs.deck) || !Array.isArray(gs.players)) return null;
+      if (gs.phase === 'finished' || !save.room.seats || !save.room.seats[0]) return null;
       return save;
     } catch (e) { return null; }
   },
@@ -919,7 +792,7 @@ const app = {
     const save = this.readBotSave();
     box.hidden = !save;
     if (!save) return;
-    const gs = save.gameState;
+    const gs = save.room.gs;
     const opp = gs.players[1] ? gs.players[1].name : 'the bot';
     document.getElementById('resume-text').textContent =
       `Resume your game vs ${opp}? ${gs.scores[0]} - ${gs.scores[1]}, deal ${Math.min(gs.roundNum + 1, gs.totalRounds)}/${gs.totalRounds}`;
@@ -929,274 +802,34 @@ const app = {
     const save = this.readBotSave();
     if (!save) { this.renderResumeOffer(); this.toast('No saved game'); return; }
     Juice.unlock();
-    const gs = save.gameState;
-    this.myName = save.myName || 'Player';
-    this.isHost = true;
-    this._isBotGame = true;
-    this.playerCount = 2;
-    this.botDifficulty = save.botDifficulty || 'medium';
-    this.gameSpeed = save.gameSpeed || 'normal';
-    this.forceCapture = gs.forceCapture !== false;
-    this.captureAssist = !!gs.captureAssist;
-    this.winScore = gs.winScore || 21;
-    this.turnTimerDuration = gs.turnTimerDuration || 0;
-    Look.setLook(gs.look || Look.savedLook(), false);
-    this.roomCode = 'BOT';
-    this.roomLink = '';
-    this.myPlayerId = 0;
-    this._controllingPlayerId = null;
-    this.playerList = save.playerList || gs.players.map((p) => p.name);
-    this.moveLog = save.moveLog || [];
-    this._roomRef = null;
-    this._botPlayers = {};
-    this._playerSlots = {};
-    this._roomStarted = true;
-    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
-    this._shown = null;
-    this.selectedCardIndex = -1; this.selectedCaptureIndices = []; this.availableCaptures = [];
-    this.isSubmittingMove = false;
-    this.closeAllOverlays();
-    this.gameState = gs;
-    this.addLogEntry('Game resumed');
-    this.log('info', 'bot game resumed:', gs.scores[0], '-', gs.scores[1]);
-    document.getElementById('resume-box').hidden = true;
-    this.broadcastGameState();
-    if (gs.phase === 'playing' && gs.currentTurn < 0 && gs.hands.every((h) => h.length === 0)) {
-      // saved between the last card of a deal and the next deal (or the scoring)
-      this.whenIdle().then(() => { if (this.gameState === gs) this.endRound(); });
+    let room;
+    try { room = ChkobaRoom.Room.restore(save.room, this.localEnv()); } catch (e) {
+      this.log('error', 'saved game unreadable:', e);
+      this.clearBotSave(); this.renderResumeOffer(); this.toast('That saved game could not be loaded');
       return;
     }
-    if (gs.phase === 'playing') { this.startTurnTimer(); this.triggerBotPlay(); }
+    const seat = save.room.seats[0];
+    document.getElementById('resume-box').hidden = true;
+    this.startLocalRoom(room, save.name || seat.name, seat.token);
+    this.log('info', 'bot game resumed:', save.room.gs.scores[0], '-', save.room.gs.scores[1]);
   },
 
-  // ========== PLAY VS BOT ==========
-  playVsBot() {
-    const name = this.readName('menu-name', 'Player'); if (!name) return;
-    Juice.unlock();
-    this.myName = name;
-    this.isHost = true;
-    this._isBotGame = true;
-    this.playerCount = 2;
-    this.forceCapture = !!this.opts.forceCapture;
-    this.captureAssist = !!this.opts.captureAssist;
-    this.winScore = +this.opts.winScore;
-    this.turnTimerDuration = +this.opts.timer;
-    this.botDifficulty = this.opts.bot;
-    this.gameSpeed = this.opts.speed;
-    Look.setLook(Look.savedLook(), false);
-
-    this.roomCode = 'BOT';
-    this.roomLink = '';
-    this.myPlayerId = 0;
-    const botNames = { easy: 'Bot (easy)', medium: 'Bot', hard: 'Bot (hard)' };
-    this.playerList = [this.myName, botNames[this.botDifficulty] || 'Bot'];
-    this.moveLog = [];
-    this._roomRef = null;
-    this._botPlayers = {};
-    this._playerSlots = {};
-    this.startGame();
-  },
-
-  isBotPlayer(playerId) {
-    if (this._isBotGame && playerId === 1) return true;
-    return !!this._botPlayers[playerId];
-  },
-
-  getBotDifficulty(playerId) {
-    if (this._isBotGame && playerId === 1) return this.botDifficulty || 'medium';
-    return this._botPlayers[playerId] || 'medium';
-  },
-
-  triggerBotPlay() {
-    if (!this.isHost || !this.gameState) return;
-    const gs = this.gameState;
-    if (gs.phase !== 'playing' || gs.currentTurn < 0) return;
-    if (this._controllingPlayerId === gs.currentTurn) return;
-    if (this.isBotPlayer(gs.currentTurn)) {
-      this.botPlayForPlayer(gs.currentTurn);
-    }
-  },
-
-  addBotToWaiting(slot) {
-    if (!this.isHost || !this._roomRef) return;
-    if (this._playerSlots[slot]) { this.toast('Slot is taken'); return; }
-
-    const diff = this.opts.bot || 'medium';
-    const botNames = { easy: 'Bot (easy)', medium: 'Bot', hard: 'Bot (hard)' };
-    let name = botNames[diff] || 'Bot';
-
-    const existing = Object.values(this._playerSlots).filter(Boolean);
-    let n = 2;
-    const base = name;
-    while (existing.includes(name)) { name = base + ' ' + n; n++; }
-
-    this._roomRef.child('players/' + slot).transaction(current => {
-      if (current) return;
-      return name;
-    }, (err, committed) => {
-      if (err || !committed) { this.toast('Slot was taken'); return; }
-      this._botPlayers[slot] = diff;
-      this.toast('Added ' + name);
-    });
-  },
-
-  removeBotFromWaiting(slot) {
-    if (!this.isHost || !this._roomRef) return;
-    if (!this._botPlayers[slot]) { this.toast('Not a bot'); return; }
-    this._roomRef.child('players/' + slot).remove();
-    delete this._botPlayers[slot];
-    this.toast('Bot removed');
-  },
-
-  botPlay() { this.triggerBotPlay(); },
-
-  botPlayForPlayer(playerId) {
-    if (!this.isHost) return;
-    const gs = this.gameState;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn !== playerId) return;
-
-    const hand = gs.hands[playerId];
-    if (!hand || hand.length === 0) return;
-
-    // legal captures only: a card of equal value on the table is taken before any sum
-    const bestMove = chooseBotMove(hand, gs.tableCards, this.getBotDifficulty(playerId), gs.forceCapture);
-
-    // The delay is a function of the speed setting only, never of the hand (a
-    // hand-dependent think time would leak information). The move waits for the
-    // board to finish animating the previous one so no two moves overlap.
-    const delays = { slow: 1200 + Math.random() * 800, normal: 600 + Math.random() * 800, fast: 200 + Math.random() * 300 };
-    const token = gs.gameToken;
-    setTimeout(() => {
-      this.whenIdle().then(() => {
-        const cur = this.gameState;
-        if (cur && cur.gameToken === token && cur.phase === 'playing' && cur.currentTurn === playerId) {
-          this.handlePlay({ playerId, ...bestMove });
-        }
-      });
-    }, delays[this.gameSpeed] || delays.normal);
-  },
-
-  // Resolves once the render queue is idle (no choreography running).
-  whenIdle() {
-    if (!this._animating) return Promise.resolve();
-    return new Promise((r) => this._idleResolvers.push(r));
-  },
-
-  // ========== START GAME ==========
-  startGame() {
-    if (!this.isHost) return;
-
-    const players = this.playerList || [];
-    const numPlayers = this.playerCount;
-    if (players.length < numPlayers) { this.toast('Not enough players'); return; }
-
-    this._roomStarted = true;
-    if (this._roomRef) this._roomRef.update({ started: true }).catch((err) => this.log('warn', 'could not mark the room started:', err.message));
-
-    const totalRounds = dealsPerDeck(numPlayers);
-
-    this.moveLog = [];
-    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
-    this.closeAllOverlays();
-
-    this.gameState = {
-      phase: 'playing', numPlayers,
-      gameToken: Date.now(),
-      players: players.map((name, i) => ({ id: i, name, team: numPlayers === 4 ? (i % 2) : i, isBot: this.isBotPlayer(i) })),
-      deck: shuffle(createDeck()), tableCards: [], hands: players.map(() => []),
-      capturedTeams: [[], []], currentTurn: -1, dealerIndex: 0, roundNum: 0, totalRounds,
-      cardsPlayedThisRound: players.map(() => 0), lastCaptureTeam: -1,
-      shkobbaCount: [0, 0], scores: [0, 0],
-      forceCapture: this.forceCapture, captureAssist: this.captureAssist, winScore: this.winScore, shkobbaThisTurn: false,
-      turnTimerDuration: this.turnTimerDuration, lastMove: null, moveSeq: 0,
-      look: Look.get(), endReason: null,
-    };
-    this.addLogEntry('Game started');
-    this.log('info', 'game started:', numPlayers, 'players, win at', this.winScore);
-    this.dealRound();
-  },
-
-  // ========== DEALING ==========
-  dealRound() {
-    const gs = this.gameState;
-    if (gs.roundNum === 0) {
-      for (let i = 0; i < 4 && gs.deck.length > 0; i++) gs.tableCards.push(gs.deck.pop());
-      gs.currentTurn = (gs.dealerIndex + 1) % gs.numPlayers;
-    } else {
-      gs.currentTurn = gs.nextDealerTurn !== undefined ? gs.nextDealerTurn : (gs.dealerIndex + 1) % gs.numPlayers;
-    }
-    for (let i = 0; i < gs.numPlayers; i++) {
-      gs.hands[i] = [];
-      for (let j = 0; j < 3 && gs.deck.length > 0; j++) gs.hands[i].push(gs.deck.pop());
-    }
-    gs.cardsPlayedThisRound = gs.cardsPlayedThisRound.map(() => 0);
-    gs.shkobbaThisTurn = false;
-    this.addLogEntry('Cards dealt, hand ' + (gs.roundNum + 1));
-    this.broadcastGameState();
-    this.renderGame();
-    this.startTurnTimer();
-    this.triggerBotPlay();
-  },
-
-  // ========== TURN MANAGEMENT ==========
-  nextTurn() {
-    const gs = this.gameState;
-    let next = (gs.currentTurn + 1) % gs.numPlayers, attempts = 0;
-    while (gs.hands[next].length === 0 && attempts < gs.numPlayers) {
-      next = (next + 1) % gs.numPlayers; attempts++;
-    }
-    if (attempts >= gs.numPlayers || gs.hands.every(h => h.length === 0)) {
-      this.endRound(); return;
-    }
-    gs.currentTurn = next;
-    this.broadcastGameState();
-    this.renderGame();
-    this.startTurnTimer();
-    this.triggerBotPlay();
-  },
-
-  // roundNum counts the deals of the current deck (0-based). It only moves on when
-  // another deal actually goes out, so the last deal of a deck is still shown as n/n
-  // on the tally and the match-end screen.
-  endRound() {
-    const gs = this.gameState;
-    this.stopTurnTimer();
-    if (gs.deck.length === 0) {
-      if (gs.tableCards.length > 0 && gs.lastCaptureTeam >= 0) {
-        gs.capturedTeams[gs.lastCaptureTeam].push(...gs.tableCards);
-        gs.tableCards = [];
-      }
-      this.calculateScores(); return;
-    }
-    gs.roundNum++;
-    this.dealRound();
-  },
-
-  // ========== TURN TIMER ==========
-  // One anchor per turn: the clock restarts when the turn changes, not on every
-  // broadcast, so a host toggling a setting mid-turn does not reset everyone's timer.
+  // ========== TURN TIMER (display) ==========
+  // The room runs the clock and plays for a player who runs out of time; this only
+  // draws it. One anchor per turn, so a setting changed mid-turn does not reset it.
   turnKey(gs) { return gs ? `${gs.gameToken}:${gs.roundNum}:${gs.moveSeq}:${gs.currentTurn}` : ''; },
 
   startTurnTimer() {
-    const gs = this.gameState;
     if (this._timerRAF) { cancelAnimationFrame(this._timerRAF); this._timerRAF = null; }
-    if (this._turnTimer) { clearTimeout(this._turnTimer); this._turnTimer = null; }
+    const gs = this.gameState;
     if (!gs) return;
     const key = this.turnKey(gs);
-    if (key !== this._turnKey) { this._turnKey = key; this._turnTimerStart = Date.now(); this._lastTimerSec = 0; }
-    if (this._gameFrozen || gs.frozen) { this.renderTurnLabel(gs); return; }
+    if (key !== this._turnKey) { this._turnKey = key; this._lastTimerSec = 0; }
     if (gs.phase !== 'playing' || gs.currentTurn < 0) { this.renderTurnLabel(gs); return; }
-
-    const duration = gs.turnTimerDuration || 0;
-    if (duration > 0 && this.isHost) {
-      const remaining = Math.max(0, duration * 1000 - (Date.now() - this._turnTimerStart));
-      this._turnTimer = setTimeout(() => this.whenIdle().then(() => this.autoPlay()), remaining);
-    }
     this.animateTurnFill();
   },
 
   stopTurnTimer() {
-    if (this._turnTimer) { clearTimeout(this._turnTimer); this._turnTimer = null; }
     if (this._timerRAF) { cancelAnimationFrame(this._timerRAF); this._timerRAF = null; }
   },
 
@@ -1231,300 +864,10 @@ const app = {
     this._timerRAF = requestAnimationFrame(tick);
   },
 
-  autoPlay() {
-    if (!this.isHost) return;
-    const gs = this.gameState;
-    if (!gs || gs.phase !== 'playing' || gs.currentTurn < 0) return;
-    if (this._gameFrozen) return;
-
-    this.playSound('timeout');
-
-    const playerId = gs.currentTurn;
-    const hand = gs.hands[playerId];
-    if (!hand || hand.length === 0) return;
-
-    const mv = autoPlayMove(hand, gs.tableCards, gs.forceCapture);
-    const card = hand.find((c) => c.id === mv.cardId);
-    const captureIds = mv.captureCardIds;
-
-    const playerName = gs.players[playerId] ? gs.players[playerId].name : 'Player ' + playerId;
-    this.addLogEntry(`Time's up: ${playerName} auto-played ${getCardDisplayName(card)}`);
-    this.toast(`${playerName} ran out of time`);
-
-    this.handlePlay({ playerId, cardId: card.id, captureCardIds: captureIds });
-  },
-
-  // ========== PLAY LOGIC ==========
-  handlePlay(data) {
-    if (!this.isHost) return;
-    const gs = this.gameState, playerId = data.playerId;
-    if (!gs) { this.log('warn', 'handlePlay ignored: no game state'); return; }
-    if (gs.phase !== 'playing') { this.log('warn', 'move rejected: phase', gs.phase); return; }
-    if (playerId !== gs.currentTurn) {
-      this.log('warn', 'move rejected: out of turn (player', playerId, 'current', gs.currentTurn + ')');
-      return;
-    }
-
-    this.stopTurnTimer();
-    this._pushHistory();
-    gs.shkobbaThisTurn = false;
-
-    const hand = gs.hands[playerId];
-    const cardIndex = hand ? hand.findIndex(c => c.id === data.cardId) : -1;
-    if (cardIndex === -1) {
-      this.log('warn', 'move rejected: card', data.cardId, 'not in player', playerId + "'s hand");
-      this.startTurnTimer();
-      return;
-    }
-
-    const playedCard = hand[cardIndex];
-    const captureIds = data.captureCardIds || [];
-
-    // one rule check for every source of moves (the host's own clicks, guests over
-    // Firebase, bots, the turn timer): sums must match, a card of equal value on the
-    // table must be taken before any sum, and force capture forbids placing
-    const verdict = checkMove(hand, gs.tableCards, playedCard.id, captureIds, gs.forceCapture);
-    if (!verdict.ok) {
-      this.log('warn', 'move rejected:', verdict.reason, 'player', playerId, getCardDisplayName(playedCard));
-      this._stateHistory.pop();
-      this.startTurnTimer();
-      return;
-    }
-
-    this.log('debug', 'processing move: player', playerId, 'plays', getCardDisplayName(playedCard),
-      captureIds.length ? '(capture)' : '(place)');
-
-    hand.splice(cardIndex, 1);
-    const teamIndex = gs.players[playerId].team;
-    const playerName = gs.players[playerId].name;
-    const slim = (c) => ({ id: c.id, name: c.name, suit: c.suit, display: c.display, value: c.value });
-    gs.moveSeq = (gs.moveSeq || 0) + 1;
-    gs.lastMove = { seq: gs.moveSeq, playerId, teamIndex, card: slim(playedCard), taken: [], chkobba: false };
-
-    if (captureIds.length > 0) {
-      const capturedCards = [];
-      const sorted = [...captureIds].sort((a, b) => gs.tableCards.findIndex(c => c.id === b) - gs.tableCards.findIndex(c => c.id === a));
-      for (const id of sorted) {
-        const idx = gs.tableCards.findIndex(c => c.id === id);
-        if (idx !== -1) capturedCards.push(...gs.tableCards.splice(idx, 1));
-      }
-      gs.lastMove.taken = capturedCards.map(slim);
-      capturedCards.push(playedCard);
-      gs.capturedTeams[teamIndex].push(...capturedCards);
-      gs.lastCaptureTeam = teamIndex;
-
-      const capturedNames = gs.lastMove.taken.map(c => getCardDisplayName(c)).join('+');
-      let logMsg = `${playerName} took ${capturedNames} with ${getCardDisplayName(playedCard)}`;
-
-      // Chkobba: clearing the table. The dealer's very last card of the deal does not count.
-      if (gs.tableCards.length === 0) {
-        if (playerId === gs.dealerIndex && hand.length === 0 && gs.deck.length === 0) {
-          // last card of the dealer, no chkobba
-        } else {
-          gs.shkobbaCount[teamIndex]++;
-          gs.shkobbaThisTurn = true;
-          gs.lastMove.chkobba = true;
-          logMsg += ', CHKOBBA';
-        }
-      }
-
-      this.addLogEntry(logMsg);
-
-      // Instant win: all 10 diamonds captured
-      const diaCount = gs.capturedTeams[teamIndex].filter(c => c.suit === DIAMONDS).length;
-      if (diaCount >= 10) {
-        this.addLogEntry('All 10 diamonds captured, instant win');
-        gs.phase = 'finished';
-        gs.winner = teamIndex;
-        gs.endReason = 'diamonds';
-        gs.currentTurn = -1;
-        this.playSound('win');
-        this.broadcastGameState();
-        this.renderGame();
-        return;
-      }
-    } else {
-      gs.tableCards.push(playedCard);
-      this.addLogEntry(`${playerName} placed ${getCardDisplayName(playedCard)}`);
-    }
-
-    gs.cardsPlayedThisRound[playerId]++;
-    if (playerId === this.activeId()) { this.isSubmittingMove = false; this.cancelSelection(false); }
-
-    if (gs.hands.every(h => h.length === 0) && gs.deck.length === 0) {
-      gs.currentTurn = -1;
-      setTimeout(() => this.whenIdle().then(() => this.gameState === gs && this.endRound()), 400);
-      this.broadcastGameState(); this.renderGame();
-    } else if (gs.hands.every(h => h.length === 0)) {
-      gs.nextDealerTurn = (playerId + 1) % gs.numPlayers;
-      gs.currentTurn = -1;
-      setTimeout(() => this.whenIdle().then(() => this.gameState === gs && this.endRound()), 400);
-      this.broadcastGameState(); this.renderGame();
-    } else {
-      this.nextTurn();
-    }
-  },
-
-  // ========== SCORING ==========
-  calculateScores() {
-    const gs = this.gameState;
-    const r = scoreRound(gs.capturedTeams, gs.shkobbaCount);
-    gs.scores[0] += r.points[0];
-    gs.scores[1] += r.points[1];
-    // counts travel with the verdicts so every client can stage the same tally
-    gs.lastScore = {
-      mostCardsPt: r.mostCardsPt, mostDiamondsPt: r.mostDiamondsPt, sevenDiamondsPt: r.sevenDiamondsPt, mostSevensPt: r.mostSevensPt,
-      counts: r.counts,
-    };
-    gs.phase = 'round_end';
-    this.addLogEntry(`Deal scored: ${gs.scores[0]} - ${gs.scores[1]}`);
-    this.log('info', 'round scored:', gs.scores[0], '-', gs.scores[1]);
-    this.broadcastGameState();
-    this.renderGame();
-  },
-
-  checkWinCondition() {
-    const gs = this.gameState;
-    const winner = matchWinner(gs.scores, gs.winScore);
-    if (winner >= 0) {
-      gs.phase = 'finished'; gs.winner = winner; gs.endReason = 'score';
-      this.addLogEntry(`Team ${winner + 1} wins the game`);
-      this.log('info', 'game over: Team', winner + 1, 'wins', gs.scores[0], '-', gs.scores[1]);
-      this.playSound('win');
-      this.broadcastGameState(); this.renderGame();
-      return;
-    }
-    if (gs.deck.length > 0) { gs.phase = 'playing'; gs.roundNum++; this.dealRound(); return; }
-
-    // Deck is empty: the deal passes on and a fresh deck goes out
-    gs.dealerIndex = (gs.dealerIndex + 1) % gs.numPlayers;
-    gs.totalRounds = dealsPerDeck(gs.numPlayers);
-    gs.phase = 'playing'; gs.deck = shuffle(createDeck());
-    gs.capturedTeams = [[], []]; gs.shkobbaCount = [0, 0]; gs.lastCaptureTeam = -1;
-    gs.tableCards = []; gs.roundNum = 0; gs.lastMove = null; gs.lastScore = null; this.dealRound();
-  },
-
-  // ========== NETWORKING ==========
-  broadcastGameState() {
-    if (!this.isHost || !this.gameState) return;
-    const gs = this.gameState;
-
-    if (this._roomRef) {
-      const updates = {};
-      updates['state'] = this.buildPublicState();
-      for (let i = 0; i < gs.numPlayers; i++) {
-        updates['hand_' + i] = gs.hands[i] || [];
-      }
-      updates['log'] = this.moveLog.slice(-50);
-      this._roomRef.update(updates).catch(err => {
-        this.log('error', 'broadcastGameState write failed:', err.message);
-        this.toast('Connection issue, the move may not have synced');
-      });
-    }
-    this.log('debug', 'broadcast state: turn', gs.currentTurn, 'phase', gs.phase, 'deck', gs.deck.length);
-    if (this._isBotGame) this.saveBotGame();
-    else this._checkPresence();
-
-    this.myHand = gs.hands[this.activeId()] || [];
-    this.renderGame();
-  },
-
-  buildPublicState() {
-    const gs = this.gameState;
-    return {
-      phase: gs.phase, numPlayers: gs.numPlayers, gameToken: gs.gameToken,
-      players: gs.players.map(p => ({ id: p.id, name: p.name, team: p.team, isBot: !!p.isBot })),
-      tableCards: [...gs.tableCards], deckCount: gs.deck.length,
-      currentTurn: gs.currentTurn, dealerIndex: gs.dealerIndex,
-      roundNum: gs.roundNum, totalRounds: gs.totalRounds,
-      lastCaptureTeam: gs.lastCaptureTeam, shkobbaCount: [...gs.shkobbaCount],
-      capturedCounts: gs.capturedTeams.map(t => t.length),
-      scores: [...gs.scores], forceCapture: gs.forceCapture, captureAssist: !!gs.captureAssist, winScore: gs.winScore,
-      cardsPlayedThisRound: [...gs.cardsPlayedThisRound],
-      lastScore: gs.lastScore || null, shkobbaThisTurn: gs.shkobbaThisTurn || false,
-      winner: gs.winner !== undefined ? gs.winner : -1,
-      endReason: gs.endReason || null,
-      turnTimerDuration: gs.turnTimerDuration || 0,
-      nextDealerTurn: gs.nextDealerTurn !== undefined ? gs.nextDealerTurn : -1,
-      diamondOwnership: this.getDiamondOwnership(),
-      lastMove: gs.lastMove || null, moveSeq: gs.moveSeq || 0,
-      look: gs.look || Look.get(),
-      frozen: this._gameFrozen || false,
-    };
-  },
-
-  getDiamondOwnership() {
-    const gs = this.gameState;
-    if (!gs) return {};
-    const ownership = {};
-    for (let t = 0; t < 2; t++) {
-      for (const card of (gs.capturedTeams[t] || [])) {
-        if (card.suit === DIAMONDS) ownership[card.name] = t;
-      }
-    }
-    return ownership;
-  },
-
-  // ========== PLAYER STATE HANDLER (guests) ==========
-  handleStateUpdate(data) {
-    const oldState = this.gameState;
-    const turnChanged = !oldState || oldState.currentTurn !== data.currentTurn || (oldState.moveSeq || 0) !== (data.moveSeq || 0) || oldState.gameToken !== data.gameToken;
-
-    this.gameState = {
-      phase: data.phase, numPlayers: data.numPlayers || 2, gameToken: data.gameToken || 0,
-      players: data.players || [],
-      tableCards: data.tableCards || [],
-      deckCount: data.deckCount || 0,
-      currentTurn: data.currentTurn,
-      dealerIndex: data.dealerIndex,
-      roundNum: data.roundNum,
-      totalRounds: data.totalRounds,
-      lastCaptureTeam: data.lastCaptureTeam,
-      shkobbaCount: data.shkobbaCount || [0, 0],
-      capturedCounts: data.capturedCounts || [0, 0],
-      scores: data.scores || [0, 0],
-      forceCapture: data.forceCapture !== undefined ? data.forceCapture : true,
-      captureAssist: !!data.captureAssist,
-      winScore: data.winScore || 21,
-      cardsPlayedThisRound: data.cardsPlayedThisRound || [],
-      lastScore: data.lastScore || null,
-      shkobbaThisTurn: data.shkobbaThisTurn || false,
-      winner: data.winner !== undefined ? data.winner : -1,
-      endReason: data.endReason || null,
-      turnTimerDuration: data.turnTimerDuration || 0,
-      nextDealerTurn: data.nextDealerTurn !== -1 ? data.nextDealerTurn : undefined,
-      diamondOwnership: data.diamondOwnership || {},
-      lastMove: data.lastMove ? { ...data.lastMove, taken: data.lastMove.taken || [] } : null,
-      moveSeq: data.moveSeq || 0,
-      look: data.look || null,
-      frozen: data.frozen || false,
-    };
-    if (this.gameState.look) Look.setLook(this.gameState.look, false);
-
-    if (turnChanged) {
-      this.isSubmittingMove = false;
-      this.selectedCardIndex = -1;
-      this.selectedCaptureIndices = [];
-      this.availableCaptures = [];
-    }
-
-    if (oldState && oldState.phase === 'playing' && data.phase === 'finished') this.playSound('win');
-
-    this.renderGame();
-    if (data.phase === 'playing' && data.currentTurn >= 0) this.startTurnTimer();
-    else this.stopTurnTimer();
-    this._checkPresence();
-  },
-
-  // The seat this browser is playing: normally mine, or the seat the host is
-  // possessing from the debug panel.
-  activeId() { return this._controllingPlayerId !== null ? this._controllingPlayerId : this.myPlayerId; },
-
   // ========== PLAYER ACTIONS ==========
   canAct() {
     const gs = this.gameState;
-    if (!gs) return false;
-    if (gs.frozen && !this.isHost) { this.toast('The host paused the game'); return false; }
+    if (!gs || !this.net || this.net.status !== 'open') return false;
     return gs.phase === 'playing' && gs.currentTurn === this.activeId() && !this.isSubmittingMove && !this._animating;
   },
 
@@ -1651,41 +994,27 @@ const app = {
     if (repaint !== false) this.refreshSelection();
   },
 
+  // The move goes to the room with the table it was made on (game + seq), so a retry or
+  // a move against an older table is ignored there. The buttons show it is on its way
+  // and always come back: on the answer, a refusal, a drop or a timeout.
   sendMove(cardId, captureCardIds) {
-    if (this.isSubmittingMove) return;
+    const gs = this.gameState;
+    if (this.isSubmittingMove || !gs || !this.net) return;
+    const card = this.myHand.find((c) => c.id === cardId);
     this.isSubmittingMove = true;
     this.refreshSelection();
-    if (this.isHost) {
-      this.log('debug', 'sending move (host, direct)', { playerId: this.activeId(), cardId, captureCardIds });
-      this.handlePlay({ playerId: this.activeId(), cardId, captureCardIds });
-      // a rejected move leaves the flag set: release it so the player can try again
-      this.isSubmittingMove = false;
-      this.refreshSelection();
-    } else if (this._roomRef) {
-      this.log('debug', 'sending move (push to Firebase)', { cardId, captureCardIds });
-      this._roomRef.child('moves').push({
-        playerId: this.myPlayerId,
-        cardId,
-        captureCardIds,
-        ts: Date.now(),
-      }).catch(err => {
-        this.log('error', 'move push failed:', err.message);
-        this.toast('Could not send the move, check your connection');
-        this.isSubmittingMove = false;
-        this.refreshSelection();
-      });
-      // the host answers with a state update; if it rejects silently, unlock after a while
-      clearTimeout(this._submitGuard);
-      this._submitGuard = setTimeout(() => { if (this.isSubmittingMove) { this.isSubmittingMove = false; this.refreshSelection(); } }, 4000);
-    }
-  },
-
-  // ========== MOVE LOG ==========
-  addLogEntry(text) {
-    const now = new Date();
-    const time = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
-    this.moveLog.push({ time, text });
-    if (this.moveLog.length > 100) this.moveLog.shift();
+    this.log('debug', 'sending move', { cardId, captureCardIds, seq: gs.moveSeq });
+    this.net.emit('move', { game: gs.gameToken, seq: gs.moveSeq, cardId, captureCardIds })
+      .then((ack) => {
+        if (ack.ok) return;
+        if (ack.error === 'illegal' && card) this.blockedMove({ reason: ack.reason, mustTake: ack.mustTake || [] }, card);
+        else { this.toast('The table changed, try again'); this.resync(); }
+      })
+      .catch((e) => {
+        this.toast(e.message === 'timeout' ? 'The server is slow to answer, try again' : 'Not connected, the move was not sent');
+        this.resync();
+      })
+      .finally(() => { this.isSubmittingMove = false; this.refreshSelection(); });
   },
 
   // ========== RENDER PIPELINE ==========
@@ -1709,8 +1038,6 @@ const app = {
       }
     } finally {
       this._animating = false;
-      const rs = this._idleResolvers; this._idleResolvers = [];
-      rs.forEach((r) => r());
       // something may have queued while the resolvers ran
       if (this._renderQueued && this.gameState) this._pump();
     }
@@ -1726,16 +1053,16 @@ const app = {
 
   async _renderStep() {
     const gs = this.gameState;
-    if (this.isHost && gs.hands) this.myHand = gs.hands[this.activeId()] || [];
     this.showScreen('screen-game');
     const prev = this._shown;
     const cur = this._snapshot(gs);
-    const anim = Look.prefs.animations && document.documentElement.dataset.screen === 'game';
+    // a hidden tab gets no animation: it would only queue up behind the timers
+    const anim = Look.prefs.animations && !document.hidden && document.documentElement.dataset.screen === 'game';
     const sameGame = prev && prev.gameToken === cur.gameToken;
 
     const mv = gs.lastMove;
     if (anim && sameGame && mv && prev.moveSeq !== mv.seq) {
-      await this._animateMove(prev, gs, mv);
+      await this._bounded(this._animateMove(prev, gs, mv));
     }
 
     // a fresh game deals the table too; a new hand deals only hands; a new deck (roundNum
@@ -1745,19 +1072,21 @@ const app = {
     const newHand = sameGame && cur.roundNum !== prev.roundNum;
     const handBack = sameGame && prev.handIds.length === 0 && cur.handIds.length > 0;
     if (fresh || newDeck) this._pendingDealTable = true;
-    let deal = false;
-    if ((fresh || newDeck || newHand || handBack) && cur.phase === 'playing') {
-      if (cur.handIds.length > 0) deal = true;
-      // the guest's hand arrives as a separate event: keep the intent until it lands
-    }
+    const deal = (fresh || newDeck || newHand || handBack) && cur.phase === 'playing' && cur.handIds.length > 0;
     this._paint();
     this._shown = this._snapshot(this.gameState);
     if (deal) {
       const withTable = this._pendingDealTable;
       this._pendingDealTable = false;
-      if (anim) await this._animateDeal(this.gameState, withTable);
+      if (anim) await this._bounded(this._animateDeal(this.gameState, withTable));
     }
     this._afterPaint();
+  },
+
+  // An animation that never finishes (a tab put to sleep mid-flight, a lost element)
+  // must not hold the board: after ANIM_LIMIT_MS the queue moves on and repaints.
+  _bounded(promise) {
+    return Promise.race([promise, new Promise((r) => setTimeout(r, ANIM_LIMIT_MS))]);
   },
 
   _paint() {
@@ -1770,8 +1099,6 @@ const app = {
     try { this.renderHand(gs); } catch (e) { this.log('error', 'renderHand:', e.message); }
     try { this.renderCaptured(gs); } catch (e) { this.log('error', 'renderCaptured:', e.message); }
     try { this.refreshSelection(); } catch (e) { this.log('error', 'refreshSelection:', e.message); }
-    try { this.renderBanners(gs); } catch (e) { this.log('error', 'renderBanners:', e.message); }
-    try { this.updateDebugPanel(); } catch (e) { /* silent */ }
     try { if (this.menuOpen) this.renderMenuContent(); } catch (e) { /* silent */ }
   },
 
@@ -1808,7 +1135,6 @@ const app = {
     const el = document.getElementById('turn-fill');
     el.classList.remove('chip', 'green', 'mult', 'text', 'urgent', 'rtl');
     el.classList.toggle('rtl', !!I18N.term('yourTurn').rtl);
-    if (this.isHost && this._gameFrozen || gs.frozen) { el.textContent = I18N.text('paused'); el.classList.add('mult'); Juice.fill(el, 1); return; }
     if (gs.phase === 'round_end') { el.textContent = I18N.text('roundEnd'); el.classList.add('text'); Juice.fill(el, 1); return; }
     if (gs.phase === 'finished') { el.textContent = I18N.text('gameOver'); el.classList.add('text'); Juice.fill(el, 1); return; }
     if (gs.phase !== 'playing') { el.textContent = ''; return; }
@@ -1826,23 +1152,18 @@ const app = {
     const shk = gs.shkobbaCount[player.team] || 0;
     const played = gs.cardsPlayedThisRound ? (gs.cardsPlayedThisRound[player.id] || 0) : 0;
     const n = gs.phase === 'playing' ? Math.max(0, Math.min(3, 3 - played)) : 0;
-    const isBot = !!player.isBot || (this.isHost && this.isBotPlayer(player.id));
-    const isControlled = this.isHost && this._controllingPlayerId === player.id;
+    const isBot = !!player.isBot;
+    const seat = this.snap && this.snap.seats[player.id];
+    const away = !!seat && !!seat.away && !seat.takeover;
     const el = document.createElement('div');
-    el.className = `opp t${player.team + 1}${isTurn ? ' active-turn' : ''}${side ? ' side' : ''}${isControlled ? ' controlled' : ''}`;
+    el.className = `opp t${player.team + 1}${isTurn ? ' active-turn' : ''}${side ? ' side' : ''}${away ? ' away' : ''}`;
     el.dataset.player = player.id;
     el.innerHTML = `<div class="av">${isBot ? 'BOT' : escapeHtml(player.name.charAt(0).toUpperCase())}</div>
-      <div class="meta"><div class="name">${escapeHtml(player.name)}${isControlled ? ' <span class="ctrl">CTRL</span>' : ''}</div>
+      <div class="meta"><div class="name">${escapeHtml(player.name)}${away ? ' <span class="badge mult">offline</span>' : ''}</div>
         <div class="backs" aria-label="${n} cards in hand"></div>
         <div class="cap">${I18N.text('karta')} <b>${cap}</b>${shk ? ` <span class="badge haya">+${shk}</span>` : ''}</div></div>`;
     const backs = el.querySelector('.backs');
     for (let i = 0; i < n; i++) backs.appendChild(Cards.back(true));
-    // spy mode is a host-only debug tool; it reads the host's own authoritative state
-    if (this._spyMode && this.isHost && gs.hands && gs.hands[player.id] && gs.hands[player.id].length) {
-      const spy = document.createElement('div'); spy.className = 'spy';
-      spy.innerHTML = gs.hands[player.id].map((c) => `<span>${c.display}${SUIT_SYMBOLS[c.suit] || ''}</span>`).join('');
-      el.querySelector('.meta').appendChild(spy);
-    }
     return el;
   },
 
@@ -1888,7 +1209,7 @@ const app = {
     const el = document.getElementById('hand-cards'); el.innerHTML = '';
     const activeId = this.activeId();
     const me = gs.players ? gs.players.find((p) => p.id === activeId) : null;
-    const mine = gs.currentTurn === activeId && gs.phase === 'playing' && !(gs.frozen && !this.isHost);
+    const mine = gs.currentTurn === activeId && gs.phase === 'playing';
     (this.myHand || []).forEach((card, i) => {
       const node = Cards.build(card, { interactive: mine, idle: true });
       node.dataset.index = i;
@@ -1963,6 +1284,8 @@ const app = {
     cancel.hidden = !has;
     cap.disabled = !valid || busy;
     place.disabled = busy;
+    cap.classList.toggle('pending', busy);
+    place.classList.toggle('pending', busy);
     Juice.fill(cap.querySelector('.fill'), valid ? 1 : (this.selectedCaptureIndices.length ? 0.45 : 0));
     Juice.fill(place.querySelector('.fill'), busy ? 0.4 : 1);
 
@@ -1980,33 +1303,6 @@ const app = {
         : this.selectedCaptureIndices.length
           ? (valid ? `${sum} = ${card.value}` : `${sum} of ${card.value}`)
           : (mustTake ? 'a matching card is on the table: take it' : '');
-    }
-  },
-
-  renderBanners(gs) {
-    let freezeBanner = document.getElementById('freeze-banner');
-    if (!freezeBanner) {
-      freezeBanner = document.createElement('div');
-      freezeBanner.id = 'freeze-banner';
-      freezeBanner.className = 'freeze-banner hidden';
-      freezeBanner.innerHTML = '<span class="freeze-icon-inline">&#10074;&#10074;</span> Game paused by the host';
-      document.getElementById('screen-game').prepend(freezeBanner);
-    }
-    freezeBanner.classList.toggle('hidden', !(gs.frozen && !this.isHost));
-
-    let possessBanner = document.getElementById('possess-banner');
-    if (!possessBanner) {
-      possessBanner = document.createElement('div');
-      possessBanner.id = 'possess-banner';
-      possessBanner.className = 'hidden';
-      document.getElementById('hand-area').prepend(possessBanner);
-    }
-    if (this.isHost && this._controllingPlayerId !== null && gs.players) {
-      const cp = gs.players[this._controllingPlayerId];
-      possessBanner.innerHTML = `<span class="possess-label">CONTROLLING: P${this._controllingPlayerId} ${escapeHtml(cp ? cp.name : '?')} (T${cp ? cp.team + 1 : '?'})</span><button class="btn-debug" onclick="app.debugReleasePossess()" style="padding:0.2rem 0.6rem;font-size:0.68rem;">Release</button>`;
-      possessBanner.classList.remove('hidden');
-    } else {
-      possessBanner.classList.add('hidden');
     }
   },
 
@@ -2224,19 +1520,23 @@ const app = {
     else if (lead >= 0) (lead === 0 ? tot1 : tot2).classList.add('win');
     J.boom(); J.shake(0.8, $('ov-ceremony').querySelector('.frame'));
     if (!stillOpen()) return;
-    if (this.isHost) {
-      $('cer-skip').textContent = 'tap to continue';
-      this._ceremonyContinue = () => this.startNextRound();
-    } else {
-      $('cer-skip').textContent = 'waiting for the host'; $('cer-skip').classList.add('waiting');
-    }
+    this.setContinue();
   },
 
-  startNextRound() {
-    if (!this.isHost) return;
-    this._ceremonyContinue = null;
-    this.closeOverlay('ov-ceremony');
-    this.checkWinCondition();
+  // Every player taps to go on. The room deals once all of them have (a bot needs no
+  // tap), or by itself after 30 s, so one player who looked away cannot stall it.
+  setContinue() {
+    const skip = document.getElementById('cer-skip');
+    const tapped = !!this.snap && this.snap.ready.includes(this.myPlayerId);
+    skip.textContent = tapped ? 'waiting for the other players' : 'tap to continue';
+    skip.classList.toggle('waiting', tapped);
+    this._ceremonyContinue = tapped ? null : () => this.continueRound();
+  },
+
+  continueRound() {
+    const skip = document.getElementById('cer-skip');
+    skip.textContent = 'waiting for the other players'; skip.classList.add('waiting');
+    this.ask('continue').then((ack) => { if (!ack || !ack.ok) this.setContinue(); });
   },
 
   // ========== MATCH END ==========
@@ -2260,7 +1560,7 @@ const app = {
       : `${escapeHtml(name)} <span class="term"><b>${I18N.text('wins')}</b></span>`;
     const sub = $('match-sub');
     const reason = gs.endReason === 'diamonds' ? 'all ten diamonds in one deal'
-      : gs.endReason === 'surrender' ? (lost ? 'you surrendered' : 'the other side surrendered')
+      : gs.endReason === 'surrender' ? (lost ? 'your side surrendered' : 'the other side surrendered')
       : gs.endReason === 'forfeit' ? 'the other side left the game' : '';
     const why = lost ? [`${name} wins`, reason].filter(Boolean).join(' · ') : reason;
     sub.textContent = why; sub.hidden = !why;
@@ -2273,9 +1573,6 @@ const app = {
     if (Juice.getJuice() > 0) for (let i = 0; i < 70; i++) { const d = document.createElement('i'); d.style.left = Math.random() * 100 + '%'; d.style.background = ['var(--gold)', 'var(--chip)', 'var(--mult)', 'var(--text)'][i % 4]; d.style.animationDelay = Math.random() * .8 + 's'; d.style.animationDuration = 2 + Math.random() * 1.5 + 's'; c.appendChild(d); }
   },
 
-  // kept for the debug panel, which still calls it after forcing a winner
-  showScoreboard() { this._ceremonyKey = ''; this._matchKey = ''; this._afterPaint(); },
-  _closeEndOverlays() { this._ceremonyContinue = null; this.closeOverlay('ov-ceremony'); this.closeOverlay('ov-match'); },
 
   // ========== CARD INFO + RULES ==========
   showInfo(card, inHand) {
@@ -2424,7 +1721,7 @@ const app = {
     const deckCount = gs.deck ? gs.deck.length : (gs.deckCount || 0);
     const cap = (i) => gs.capturedCounts ? gs.capturedCounts[i] : (gs.capturedTeams ? gs.capturedTeams[i].length : 0);
     const teamName = (i) => gs.numPlayers === 4 ? `${t('team')} ${i + 1}` : (gs.players[i] ? escapeHtml(gs.players[i].name) : `${t('team')} ${i + 1}`);
-    const ownership = gs.diamondOwnership || (this.isHost ? this.getDiamondOwnership() : {});
+    const ownership = gs.diamondOwnership || {};
     const names = ['ace', '2', '3', '4', '5', '6', '7', 'jack', 'queen', 'king'];
     const labels = ['A', '2', '3', '4', '5', '6', '7', 'J', 'Q', 'K'];
     const pip = Cards.getSuit() === 'coin' ? '●' : '♦';
@@ -2477,7 +1774,8 @@ const app = {
     let html = '<div class="move-log">';
     for (let i = this.moveLog.length - 1; i >= 0; i--) {
       const entry = this.moveLog[i];
-      html += `<div class="entry"><span class="t">${escapeHtml(entry.time)}</span><span>${escapeHtml(entry.text)}</span></div>`;
+      const time = new Date(entry.ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
+      html += `<div class="entry"><span class="t">${escapeHtml(time)}</span><span>${escapeHtml(entry.text)}</span></div>`;
     }
     return html + '</div>';
   },
@@ -2500,56 +1798,34 @@ const app = {
     this.renderMenuContent();
   },
 
-  toggleForceCapture(checked) {
+  // Rules and look belong to the room: only its host changes them, and the room
+  // sends the change to everyone.
+  changeRule(change) {
     if (!this.isHost || !this.gameState) { this.toast('Only the host can change the rules'); return; }
-    this.gameState.forceCapture = checked;
-    this.forceCapture = checked;
-    this.toast('Force capture ' + (checked ? 'on' : 'off'));
-    this.broadcastGameState();
+    this.ask('settings', change).then((ack) => {
+      if (!ack || !ack.ok) return;
+      const [k, v] = Object.entries(change)[0];
+      const label = { forceCapture: 'Force capture', captureAssist: 'Capture assist', timer: 'Turn timer' }[k];
+      this.toast(`${label} ${k === 'timer' ? (v > 0 ? v + 's' : 'off') : v ? 'on' : 'off'}`);
+    });
   },
-
-  toggleCaptureAssist(checked) {
-    if (!this.isHost || !this.gameState) { this.toast('Only the host can change the rules'); return; }
-    this.gameState.captureAssist = checked;
-    this.captureAssist = checked;
-    this.toast('Capture assist ' + (checked ? 'on' : 'off'));
-    this.broadcastGameState();
-  },
-
-  changeTurnTimer(value) {
-    if (!this.isHost || !this.gameState) { this.toast('Only the host can change the rules'); return; }
-    this.gameState.turnTimerDuration = value;
-    this.turnTimerDuration = value;
-    this.toast('Turn timer ' + (value > 0 ? value + 's' : 'off'));
-    this.broadcastGameState();
-    if (this.gameState.phase === 'playing' && this.gameState.currentTurn >= 0) this.startTurnTimer();
-  },
+  toggleForceCapture(checked) { this.changeRule({ forceCapture: checked }); },
+  toggleCaptureAssist(checked) { this.changeRule({ captureAssist: checked }); },
+  changeTurnTimer(value) { this.changeRule({ timer: value }); },
 
   // The host's look change is the room's look: it goes out with the state and also
   // becomes the host's default for the next room.
   changeLook(partial) {
     if (!this.isHost || !this.gameState) { this.toast('The host picks the look'); return; }
-    const look = Look.setLook(partial, true);
-    this.gameState.look = look;
-    this.broadcastGameState();
+    Look.setLook(partial, true);
+    this.ask('settings', { look: partial });
   },
 
   surrenderGame() {
     if (!this.gameState || this.gameState.phase !== 'playing') { this.toast('No active game'); return; }
-    const me = this.gameState.players.find(p => p.id === this.myPlayerId);
-    if (!me) return;
     if (!confirm('Surrender this game?')) return;
-    if (!this.isHost) { this.toast('Only the host can end the game'); return; }
-    const gs = this.gameState;
-    gs.phase = 'finished';
-    gs.winner = me.team === 0 ? 1 : 0;
-    gs.endReason = 'surrender';
-    gs.currentTurn = -1;
-    gs.lastScore = null;
-    this.addLogEntry(`Team ${me.team + 1} surrendered`);
     this.toggleMenu();
-    this.broadcastGameState();
-    this.renderGame();
+    this.ask('surrender');
   },
 
   // ========== EMOTES ==========
@@ -2563,840 +1839,18 @@ const app = {
     this._emoteTimeout = setTimeout(() => { el.hidden = true; this._emoteTimeout = null; }, 2000);
   },
 
-  sendEmote(emote) {
-    const emotes = { gg: 'GG! \u{1F44F}', nice: 'Nice! \u{1F525}', wow: 'Wow! \u{1F632}', oops: 'Oops! \u{1F605}', hurry: 'Hurry up! ⏰' };
-    const text = emotes[emote] || emote;
-    const myPlayer = this.gameState && this.gameState.players ? this.gameState.players.find(p => p.id === this.myPlayerId) : null;
-    const name = myPlayer ? myPlayer.name : this.myName;
-    this.showEmote(name, text);
+  // The room passes it on to the others and answers with the text to show here.
+  sendEmote(key) {
+    if (!this.net) return;
     this.playSound('click');
-    if (this._roomRef) this._roomRef.child('emote').set({ name, text, ts: Date.now() });
+    this.net.emit('emote', { key }).then((ack) => { if (ack.ok) this.showEmote(ack.name, ack.text); }, () => {});
   },
 
   // ========== REMATCH ==========
+  // The match screen closes when the new game's first state arrives.
   rematch() {
     if (!this.isHost) { this.toast('Only the host can start a rematch'); return; }
-    this._closeEndOverlays();
-    this.startGame();
-    this.toast('Rematch');
-  },
-
-  // ========== DEBUG MODE ==========
-  debugEnabled: false,
-  _debugMinimized: false,
-
-  toggleDebug() {
-    if (!this.isHost) { this.toast('Debug is host-only'); return; }
-    this.debugEnabled = !this.debugEnabled;
-    this._debugMinimized = false;
-    this.log('info', 'debug mode', this.debugEnabled ? 'ON (verbose logging enabled)' : 'OFF');
-    const panel = document.getElementById('debug-panel');
-    const checkbox = document.getElementById('debug-toggle');
-    const pill = document.getElementById('debug-restore-pill');
-    if (panel) { panel.classList.toggle('hidden', !this.debugEnabled); panel.classList.remove('minimized'); }
-    if (checkbox) checkbox.checked = this.debugEnabled;
-    if (pill) pill.classList.add('hidden');
-    if (this.debugEnabled && panel) {
-      this.updateDebugPanel();
-      this.makeDebugDraggable(panel);
-    }
-  },
-
-  minimizeDebug() {
-    this._debugMinimized = true;
-    const panel = document.getElementById('debug-panel');
-    if (panel) panel.classList.add('hidden');
-    let pill = document.getElementById('debug-restore-pill');
-    if (!pill) {
-      pill = document.createElement('button');
-      pill.id = 'debug-restore-pill';
-      pill.className = 'debug-restore-pill';
-      pill.textContent = '🔧 Debug';
-      pill.onclick = () => this.restoreDebug();
-      document.body.appendChild(pill);
-    }
-    pill.classList.remove('hidden');
-  },
-
-  restoreDebug() {
-    this._debugMinimized = false;
-    const panel = document.getElementById('debug-panel');
-    const pill = document.getElementById('debug-restore-pill');
-    if (panel) { panel.classList.remove('hidden'); this.updateDebugPanel(); }
-    if (pill) pill.classList.add('hidden');
-  },
-
-  makeDebugDraggable(panel) {
-    const header = panel.querySelector('.debug-header');
-    if (header._dragInit) return;
-    header._dragInit = true;
-    let isDragging = false, startX, startY, origLeft, origTop;
-
-    const onMouseDown = (e) => {
-      if (e.target.tagName === 'BUTTON') return;
-      isDragging = true;
-      const rect = panel.getBoundingClientRect();
-      panel.style.left = rect.left + 'px';
-      panel.style.top = rect.top + 'px';
-      panel.style.transform = 'none';
-      startX = e.clientX;
-      startY = e.clientY;
-      origLeft = rect.left;
-      origTop = rect.top;
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-    };
-
-    const onMouseMove = (e) => {
-      if (!isDragging) return;
-      panel.style.left = (origLeft + e.clientX - startX) + 'px';
-      panel.style.top = (origTop + e.clientY - startY) + 'px';
-    };
-
-    const onMouseUp = () => {
-      isDragging = false;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-
-    header.addEventListener('mousedown', onMouseDown);
-  },
-
-  switchDebugTab(tab) {
-    this.debugTab = tab;
-    document.querySelectorAll('.debug-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-    this.updateDebugPanel();
-  },
-
-  updateDebugPanel() {
-    if (!this.debugEnabled) return;
-    const gs = this.gameState;
-    const body = document.getElementById('debug-body');
-    if (!body) return;
-
-    if (!gs) {
-      body.innerHTML = '<div style="color:var(--text-dim);padding:1rem;">No game in progress</div>';
-      return;
-    }
-
-    switch (this.debugTab) {
-      case 'hands': body.innerHTML = this.renderDebugHands(); break;
-      case 'table': body.innerHTML = this.renderDebugTable(); break;
-      case 'deck': body.innerHTML = this.renderDebugDeck(); break;
-      case 'controls': body.innerHTML = this.renderDebugControls(); break;
-    }
-  },
-
-  renderDebugHands() {
-    const gs = this.gameState;
-    if (!gs || !gs.players) return '<div style="color:var(--text-dim);">No game data</div>';
-
-    let html = '';
-    for (let i = 0; i < gs.players.length; i++) {
-      const p = gs.players[i];
-      const hand = gs.hands ? gs.hands[i] : [];
-      const turnMark = gs.currentTurn === i ? '<span class="debug-turn-indicator"> ▶</span>' : '';
-      const isMe = i === this.myPlayerId;
-
-      html += `<div class="debug-player-hand">
-        <div class="debug-player-label">
-          <span style="color:${isMe ? 'var(--gold)' : 'var(--text-secondary)'}">P${i} ${escapeHtml(p.name)}${turnMark}</span>
-        </div>
-        <div>`;
-
-      if (hand && hand.length > 0) {
-        hand.forEach((c, ci) => {
-          const sym = SUIT_SYMBOLS[c.suit] || '';
-          html += `<span class="debug-card removable" onclick="app.debugRemoveCardFromPlayer(${i}, ${ci})" title="Click to remove">${c.display}${sym}</span>`;
-        });
-      } else {
-        html += '<span style="color:var(--text-dim);font-size:0.72rem;">empty</span>';
-      }
-
-      html += `</div>
-        <div class="debug-controls-row" style="margin-top:0.35rem; display:flex; gap:0.3rem;">
-          <select id="debug-card-select-${i}" class="debug-select" style="font-size:0.68rem;padding:0.2rem;max-width:130px;">
-            ${this.getCardOptionsHtml()}
-          </select>
-          <button class="btn-debug" onclick="app.debugAddCardToPlayer(${i})" style="font-size:0.68rem;padding:0.2rem 0.4rem;">+ Add</button>
-        </div>
-      </div>`;
-    }
-
-    return `<div class="debug-section">${html}</div>`;
-  },
-
-  renderDebugTable() {
-    const gs = this.gameState;
-    if (!gs) return '<div style="color:var(--text-dim);">No game data</div>';
-
-    let tableHtml = '';
-    if (gs.tableCards && gs.tableCards.length > 0) {
-      gs.tableCards.forEach((c, i) => {
-        const sym = SUIT_SYMBOLS[c.suit] || '';
-        tableHtml += `<span class="debug-card removable" onclick="app.debugRemoveTableCard(${i})" title="Click to remove">${c.display}${sym}</span>`;
-      });
-    } else {
-      tableHtml = '<span style="color:var(--text-dim);font-size:0.72rem;">Table is empty</span>';
-    }
-
-    return `
-      <div class="debug-section">
-        <div class="debug-section-title">Table Cards (click to remove)</div>
-        <div>${tableHtml}</div>
-        <div style="margin-top:0.5rem;">
-          <div class="debug-controls-row">
-            <select id="debug-table-card-select" class="debug-select">
-              ${this.getCardOptionsHtml()}
-            </select>
-            <button class="btn-debug" onclick="app.debugAddTableCard()">Add to Table</button>
-          </div>
-        </div>
-      </div>
-    `;
-  },
-
-  renderDebugDeck() {
-    const gs = this.gameState;
-    if (!gs) return '<div style="color:var(--text-dim);">No game data</div>';
-
-    const deck = gs.deck || [];
-    const top20 = deck.slice(-20).reverse();
-
-    let deckHtml = '';
-    if (top20.length > 0) {
-      top20.forEach(c => {
-        const sym = SUIT_SYMBOLS[c.suit] || '';
-        deckHtml += `<span class="debug-card">${c.display}${sym}</span>`;
-      });
-    } else {
-      deckHtml = '<span style="color:var(--text-dim);font-size:0.72rem;">Deck is empty</span>';
-    }
-
-    return `
-      <div class="debug-section">
-        <div class="debug-section-title">Deck (top ${Math.min(20, deck.length)} of ${deck.length})</div>
-        <div>${deckHtml}</div>
-        <div style="margin-top:0.5rem;display:flex;gap:0.3rem;">
-          <button class="btn-debug" onclick="app.debugShuffleDeck()">🔀 Shuffle</button>
-          <button class="btn-debug" onclick="app.debugRefillDeck()">♻ Refill Deck</button>
-        </div>
-      </div>
-    `;
-  },
-
-  renderDebugControls() {
-    const gs = this.gameState;
-    if (!gs) return '<div style="color:var(--text-dim);">No game data</div>';
-
-    let playerOpts = '';
-    gs.players.forEach(p => {
-      playerOpts += `<option value="${p.id}">P${p.id} ${escapeHtml(p.name)}</option>`;
-    });
-
-    const capT1 = gs.capturedTeams[0] ? gs.capturedTeams[0].length : 0;
-    const capT2 = gs.capturedTeams[1] ? gs.capturedTeams[1].length : 0;
-
-    return `
-      <div class="debug-section">
-        <div class="debug-section-title">Undo / History</div>
-        <div class="debug-controls">
-          <button class="btn-debug" onclick="app.debugUndo()">↩ Undo Last Move</button>
-          <button class="btn-debug" onclick="app.debugRerunRound()">🔄 Rerun This Round</button>
-          <button class="btn-debug" onclick="app.debugSaveState()">💾 Save Snapshot</button>
-          <button class="btn-debug" onclick="app.debugLoadState()">📂 Load Snapshot</button>
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">Turn Control</div>
-        <div class="debug-controls">
-          <div class="debug-controls-row">
-            <select id="debug-set-turn" class="debug-select">${playerOpts}</select>
-            <button class="btn-debug" onclick="app.debugSetTurn()">Set Turn</button>
-          </div>
-          <button class="btn-debug" onclick="app.debugSkipTurn()">⏭ Skip Turn</button>
-          <button class="btn-debug" onclick="app.debugPauseTurn()">⏸ Pause Timer</button>
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">Score & Chkobba</div>
-        <div class="debug-controls">
-          <div class="debug-controls-row">
-            <label style="font-size:0.72rem;color:var(--team1);min-width:30px;">T1:</label>
-            <input type="number" id="debug-score-t1" class="debug-select" value="${gs.scores[0]}" min="0" style="width:50px;">
-            <label style="font-size:0.72rem;color:var(--team2);min-width:30px;">T2:</label>
-            <input type="number" id="debug-score-t2" class="debug-select" value="${gs.scores[1]}" min="0" style="width:50px;">
-            <button class="btn-debug" onclick="app.debugSetScores()">Set</button>
-          </div>
-          <div class="debug-controls-row">
-            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Chkobba T1:</label>
-            <input type="number" id="debug-shk-t1" class="debug-select" value="${gs.shkobbaCount[0]}" min="0" style="width:50px;">
-            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Chkobba T2:</label>
-            <input type="number" id="debug-shk-t2" class="debug-select" value="${gs.shkobbaCount[1]}" min="0" style="width:50px;">
-            <button class="btn-debug" onclick="app.debugSetShkobba()">Set</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">Move Cards Between Zones</div>
-        <div class="debug-controls">
-          <div class="debug-controls-row">
-            <button class="btn-debug" onclick="app.debugTableToHand()">Table → Hand</button>
-            <button class="btn-debug" onclick="app.debugHandToTable()">Hand → Table</button>
-          </div>
-          <div class="debug-controls-row">
-            <button class="btn-debug" onclick="app.debugSwapHands()">🔄 Swap Hands</button>
-            <button class="btn-debug" onclick="app.debugClearTable()">🗑 Clear Table</button>
-          </div>
-          <div class="debug-controls-row">
-            <button class="btn-debug" onclick="app.debugReturnCaptures(0)">Return T1 Captures</button>
-            <button class="btn-debug" onclick="app.debugReturnCaptures(1)">Return T2 Captures</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">Game Actions</div>
-        <div class="debug-controls">
-          <button class="btn-debug" onclick="app.debugDealRound()">📤 Force Deal Round</button>
-          <button class="btn-debug" onclick="app.debugForceScoring()">📊 Force Score Now</button>
-          <div class="debug-controls-row" style="margin-top:0.3rem;">
-            <button class="btn-debug" onclick="app.debugShowWinner()">🏆 Win T1</button>
-            <button class="btn-debug danger" onclick="app.debugShowWinner(1)">🏆 Win T2</button>
-          </div>
-          <div class="debug-controls-row" style="margin-top:0.3rem;">
-            <button class="btn-debug" onclick="app.debugToggleForceCapture()">⚡ Toggle Force Capture (${gs.forceCapture ? 'ON' : 'OFF'})</button>
-          </div>
-          <div class="debug-controls-row" style="margin-top:0.3rem;">
-            <button class="btn-debug" onclick="app.debugResetGame()">🔥 Full Reset (Keep Players)</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">Bot Management</div>
-        <div class="debug-controls">
-          ${gs.players.map(p => {
-            if (p.id === 0) return '';
-            const isBot = this.isBotPlayer(p.id);
-            if (isBot) {
-              return `<div class="debug-controls-row" style="align-items:center;">
-                <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
-                <span class="bot-badge" style="margin-left:0.3rem;">BOT</span>
-                <button class="btn-debug danger" onclick="app.debugRemoveBot(${p.id})" style="margin-left:auto;">Remove Bot</button>
-              </div>`;
-            }
-            return `<div class="debug-controls-row" style="align-items:center;">
-              <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
-              <select id="debug-bot-diff-${p.id}" class="debug-select" style="font-size:0.68rem;padding:0.2rem;width:70px;margin-left:auto;">
-                <option value="easy">Easy</option>
-                <option value="medium" selected>Medium</option>
-                <option value="hard">Hard</option>
-              </select>
-              <button class="btn-debug" onclick="app.debugAddBot(${p.id})">+ Bot</button>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">Team Control</div>
-        <div class="debug-controls">
-          ${gs.players.map(p => {
-            const otherTeam = p.team === 0 ? 1 : 0;
-            return `<div class="debug-controls-row" style="align-items:center;">
-              <span style="font-size:0.72rem;color:var(--team${p.team + 1});">P${p.id} ${escapeHtml(p.name)} — T${p.team + 1}</span>
-              <button class="btn-debug" onclick="app.debugSwapTeam(${p.id})" style="margin-left:auto;font-size:0.68rem;">Move to T${otherTeam + 1}</button>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">Player Control</div>
-        <div class="debug-controls">
-          ${this._controllingPlayerId !== null
-            ? `<div class="debug-controls-row" style="align-items:center;">
-                <span style="font-size:0.72rem;color:var(--gold);">Controlling P${this._controllingPlayerId} ${escapeHtml(gs.players[this._controllingPlayerId]?.name || '?')}</span>
-                <button class="btn-debug danger" onclick="app.debugReleasePossess()" style="margin-left:auto;">Release</button>
-              </div>`
-            : gs.players.filter(p => p.id !== this.myPlayerId).map(p => {
-                return `<div class="debug-controls-row" style="align-items:center;">
-                  <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
-                  <button class="btn-debug" onclick="app.debugPossessPlayer(${p.id})" style="margin-left:auto;font-size:0.68rem;">Play As</button>
-                </div>`;
-              }).join('')
-          }
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">Host Powers</div>
-        <div class="debug-controls">
-          <button class="btn-debug ${this._gameFrozen ? 'danger' : ''}" onclick="app.debugToggleFreeze()">
-            ${this._gameFrozen ? '▶ Unfreeze Game' : '❄ Freeze Game'}
-          </button>
-          <button class="btn-debug ${this._spyMode ? 'danger' : ''}" onclick="app.debugToggleSpy()">
-            ${this._spyMode ? '🔒 Hide Hands' : '👁 Spy Mode (See All Hands)'}
-          </button>
-          <div class="debug-controls-row">
-            <label style="font-size:0.72rem;color:var(--text-secondary);min-width:70px;">Win Score:</label>
-            <input type="number" id="debug-win-score" class="debug-select" value="${gs.winScore}" min="1" style="width:60px;">
-            <button class="btn-debug" onclick="app.debugSetWinScore()">Set</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="debug-section">
-        <div class="debug-section-title">State Info</div>
-        <div style="font-size:0.7rem;color:var(--text-secondary);line-height:1.6;font-family:monospace;">
-          <div>Phase: ${gs.phase} | Turn: P${gs.currentTurn} | Dealer: P${gs.dealerIndex}</div>
-          <div>Deck: ${(gs.deck || []).length} | Table: ${(gs.tableCards || []).length} | Round: ${gs.roundNum + 1}/${gs.totalRounds}</div>
-          <div>Captured: T1=${capT1} T2=${capT2} | Last Cap: T${gs.lastCaptureTeam + 1}</div>
-          <div>Shkobba: T1=${gs.shkobbaCount[0]} T2=${gs.shkobbaCount[1]} | Scores: ${gs.scores[0]}-${gs.scores[1]}</div>
-          <div>Force: ${gs.forceCapture ? 'ON' : 'OFF'} | Timer: ${gs.turnTimerDuration || 'Off'}s | Win: ${gs.winScore}</div>
-          <div>Frozen: ${this._gameFrozen ? 'YES' : 'no'} | Ctrl: ${this._controllingPlayerId !== null ? 'P' + this._controllingPlayerId : 'none'} | Spy: ${this._spyMode ? 'ON' : 'off'}</div>
-        </div>
-      </div>
-    `;
-  },
-
-  getCardOptionsHtml() {
-    const allCards = createDeck();
-    return allCards.map((c, i) => {
-      const sym = SUIT_SYMBOLS[c.suit] || '';
-      return `<option value="${i}">${c.display}${sym} of ${c.suit}</option>`;
-    }).join('');
-  },
-
-  // ========== DEBUG ACTIONS ==========
-  _makeDebugCard(deckIndex) {
-    const card = createDeck()[deckIndex];
-    card.id = 1000 + Date.now() % 10000 + Math.floor(Math.random() * 1000);
-    return card;
-  },
-
-  debugAddCardToPlayer(playerIndex) {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Debug: Host only'); return; }
-
-    const sel = document.getElementById(`debug-card-select-${playerIndex}`);
-    if (!sel) return;
-    const idx = parseInt(sel.value);
-    if (isNaN(idx) || idx < 0 || idx >= 40) { this.toast('Invalid card index'); return; }
-
-    const card = this._makeDebugCard(idx);
-    if (!gs.hands[playerIndex]) gs.hands[playerIndex] = [];
-    gs.hands[playerIndex].push(card);
-    this.toast(`Added ${card.display} of ${card.suit} to P${playerIndex}`);
-    this.broadcastGameState();
-    this.updateDebugPanel();
-  },
-
-  debugRemoveCardFromPlayer(playerIndex, cardIndex) {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Debug: Host only'); return; }
-    const hand = gs.hands[playerIndex];
-    if (!hand || cardIndex >= hand.length) return;
-    const removed = hand.splice(cardIndex, 1)[0];
-    this.toast(`Removed ${removed.display} of ${removed.suit} from P${playerIndex}`);
-    this.broadcastGameState();
-    this.updateDebugPanel();
-  },
-
-  debugAddTableCard() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Debug: Host only'); return; }
-    const sel = document.getElementById('debug-table-card-select');
-    if (!sel) return;
-    const idx = parseInt(sel.value);
-    const card = this._makeDebugCard(idx);
-    gs.tableCards.push(card);
-    this.toast(`Added ${card.display} of ${card.suit} to table`);
-    this.broadcastGameState();
-    this.updateDebugPanel();
-  },
-
-  debugRemoveTableCard(index) {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Debug: Host only'); return; }
-    if (index >= gs.tableCards.length) return;
-    const removed = gs.tableCards.splice(index, 1)[0];
-    this.toast(`Removed ${removed.display} of ${removed.suit} from table`);
-    this.broadcastGameState();
-    this.updateDebugPanel();
-  },
-
-  debugShuffleDeck() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Debug: Host only'); return; }
-    shuffle(gs.deck);
-    this.toast('Deck shuffled!');
-    this.broadcastGameState();
-    this.updateDebugPanel();
-  },
-
-  debugRefillDeck() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Debug: Host only'); return; }
-    gs.deck = shuffle(createDeck());
-    this.toast('Deck refilled with 40 cards!');
-    this.broadcastGameState();
-    this.updateDebugPanel();
-  },
-
-  debugSetTurn() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Debug: Host only'); return; }
-    const sel = document.getElementById('debug-set-turn');
-    if (!sel) return;
-    gs.currentTurn = parseInt(sel.value);
-    gs.shkobbaThisTurn = false;
-    this.toast('Turn set to P' + gs.currentTurn);
-    this.broadcastGameState();
-    this.renderGame();
-    this.startTurnTimer();
-    this.triggerBotPlay();
-  },
-
-  debugSetScores() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Debug: Host only'); return; }
-    const s1 = parseInt(document.getElementById('debug-score-t1')?.value || 0);
-    const s2 = parseInt(document.getElementById('debug-score-t2')?.value || 0);
-    gs.scores[0] = isNaN(s1) ? 0 : s1;
-    gs.scores[1] = isNaN(s2) ? 0 : s2;
-    this.toast(`Scores set: Team 1 = ${gs.scores[0]}, Team 2 = ${gs.scores[1]}`);
-    this.broadcastGameState();
-    this.renderGame();
-  },
-
-  debugSkipTurn() {
-    const gs = this.gameState;
-    if (!gs || gs.phase !== 'playing') { this.toast('No active game'); return; }
-    this.nextTurn();
-    this.updateDebugPanel();
-  },
-
-  debugDealRound() {
-    const gs = this.gameState;
-    if (!gs) { this.toast('No active game'); return; }
-    gs.deck = shuffle(createDeck());
-    gs.tableCards = [];
-    gs.roundNum = 0;
-    this.dealRound();
-    this.updateDebugPanel();
-  },
-
-  debugShowWinner(team = 0) {
-    const gs = this.gameState;
-    if (!gs) { this.toast('No active game'); return; }
-    gs.scores[team] = gs.winScore;
-    gs.winner = team;
-    gs.phase = 'finished';
-    gs.currentTurn = -1;
-    gs.lastScore = null;
-    this.broadcastGameState();
-    this.renderGame();
-    this.showScoreboard();
-    this.updateDebugPanel();
-  },
-
-  _stateHistory: [],
-  _savedSnapshot: null,
-
-  _pushHistory() {
-    const gs = this.gameState;
-    if (!gs) return;
-    const snap = JSON.stringify({
-      hands: gs.hands, tableCards: gs.tableCards, deck: gs.deck,
-      capturedTeams: gs.capturedTeams, currentTurn: gs.currentTurn,
-      dealerIndex: gs.dealerIndex, roundNum: gs.roundNum,
-      shkobbaCount: gs.shkobbaCount, scores: gs.scores,
-      lastCaptureTeam: gs.lastCaptureTeam, phase: gs.phase,
-      cardsPlayedThisRound: gs.cardsPlayedThisRound,
-      shkobbaThisTurn: gs.shkobbaThisTurn, lastMove: gs.lastMove,
-      forceCapture: gs.forceCapture,
-    });
-    this._stateHistory.push(snap);
-    if (this._stateHistory.length > 50) this._stateHistory.shift();
-  },
-
-  debugUndo() {
-    if (!this.isHost || !this.gameState) { this.toast('No game'); return; }
-    if (this._stateHistory.length === 0) { this.toast('Nothing to undo'); return; }
-    const snap = JSON.parse(this._stateHistory.pop());
-    Object.assign(this.gameState, snap);
-    this.toast('Undid last move');
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-    this.startTurnTimer();
-    this.triggerBotPlay();
-  },
-
-  debugRerunRound() {
-    if (!this.isHost || !this.gameState) { this.toast('No game'); return; }
-    const gs = this.gameState;
-    gs.capturedTeams = [[], []];
-    gs.shkobbaCount = [0, 0];
-    gs.lastCaptureTeam = -1;
-    gs.lastMove = null;
-    gs.tableCards = [];
-    gs.roundNum = 0;
-    gs.deck = shuffle(createDeck());
-    gs.phase = 'playing';
-    this._closeEndOverlays();
-    this.dealRound();
-    this.toast('Round restarted!');
-    this.updateDebugPanel();
-  },
-
-  debugSaveState() {
-    if (!this.isHost || !this.gameState) { this.toast('No game'); return; }
-    this._savedSnapshot = JSON.stringify(this.gameState);
-    this.toast('Snapshot saved!');
-  },
-
-  debugLoadState() {
-    if (!this.isHost) { this.toast('Host only'); return; }
-    if (!this._savedSnapshot) { this.toast('No snapshot saved'); return; }
-    const snap = JSON.parse(this._savedSnapshot);
-    this.gameState = snap;
-    this._closeEndOverlays();
-    this.broadcastGameState();
-    this.renderGame();
-    this.startTurnTimer();
-    this.toast('Snapshot loaded!');
-    this.updateDebugPanel();
-    this.triggerBotPlay();
-  },
-
-  debugPauseTurn() {
-    this.stopTurnTimer();
-    this.toast('Timer paused');
-  },
-
-  debugSetShkobba() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Host only'); return; }
-    const s1 = parseInt(document.getElementById('debug-shk-t1')?.value || 0);
-    const s2 = parseInt(document.getElementById('debug-shk-t2')?.value || 0);
-    gs.shkobbaCount[0] = isNaN(s1) ? 0 : s1;
-    gs.shkobbaCount[1] = isNaN(s2) ? 0 : s2;
-    this.toast(`Shkobba set: T1=${gs.shkobbaCount[0]}, T2=${gs.shkobbaCount[1]}`);
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugTableToHand() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Host only'); return; }
-    if (gs.tableCards.length === 0) { this.toast('Table is empty'); return; }
-    const card = gs.tableCards.pop();
-    const pid = gs.currentTurn >= 0 ? gs.currentTurn : 0;
-    gs.hands[pid].push(card);
-    this.toast(`Moved ${card.display} from table to P${pid}'s hand`);
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugHandToTable() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Host only'); return; }
-    const pid = gs.currentTurn >= 0 ? gs.currentTurn : 0;
-    const hand = gs.hands[pid];
-    if (!hand || hand.length === 0) { this.toast('Hand is empty'); return; }
-    const card = hand.pop();
-    gs.tableCards.push(card);
-    this.toast(`Moved ${card.display} from P${pid}'s hand to table`);
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugSwapHands() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost || gs.numPlayers < 2) return;
-    [gs.hands[0], gs.hands[1]] = [gs.hands[1], gs.hands[0]];
-    this.toast('Hands swapped between P0 and P1');
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugClearTable() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) return;
-    const count = gs.tableCards.length;
-    gs.tableCards = [];
-    this.toast(`Cleared ${count} cards from table`);
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugReturnCaptures(teamIndex) {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) return;
-    const cards = gs.capturedTeams[teamIndex];
-    if (!cards || cards.length === 0) { this.toast('No captures to return'); return; }
-    gs.deck.push(...cards);
-    shuffle(gs.deck);
-    const count = cards.length;
-    gs.capturedTeams[teamIndex] = [];
-    this.toast(`Returned ${count} cards from T${teamIndex + 1} captures to deck`);
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugForceScoring() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) return;
-    if (gs.tableCards.length > 0 && gs.lastCaptureTeam >= 0) {
-      gs.capturedTeams[gs.lastCaptureTeam].push(...gs.tableCards);
-      gs.tableCards = [];
-    }
-    this.calculateScores();
-    this.toast('Forced scoring!');
-    this.updateDebugPanel();
-  },
-
-  debugToggleForceCapture() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) return;
-    gs.forceCapture = !gs.forceCapture;
-    this.forceCapture = gs.forceCapture;
-    this.toast('Force capture ' + (gs.forceCapture ? 'ON' : 'OFF'));
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugAddBot(playerId) {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Host only'); return; }
-    if (playerId === 0) { this.toast("Can't replace the host"); return; }
-    if (this.isBotPlayer(playerId)) { this.toast('Already a bot'); return; }
-
-    const sel = document.getElementById('debug-bot-diff-' + playerId);
-    const diff = sel ? sel.value : 'medium';
-    this._botPlayers[playerId] = diff;
-
-    const botNames = { easy: 'Bot (Easy)', medium: 'Bot', hard: 'Bot (Hard)' };
-    gs.players[playerId].name = botNames[diff] || 'Bot';
-
-    if (this._roomRef) {
-      this._roomRef.child('players/' + playerId).set(gs.players[playerId].name);
-    }
-
-    this.toast('P' + playerId + ' replaced with bot');
-    this.broadcastGameState();
-    this.renderGame();
-    if (gs.currentTurn === playerId) this.triggerBotPlay();
-  },
-
-  debugRemoveBot(playerId) {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Host only'); return; }
-    if (!this._botPlayers[playerId]) { this.toast('Not a bot'); return; }
-
-    delete this._botPlayers[playerId];
-    this.toast('P' + playerId + ' is no longer a bot (timer will auto-play)');
-    this.updateDebugPanel();
-  },
-
-  debugResetGame() {
-    if (!this.isHost) return;
-    this._closeEndOverlays();
-    this._stateHistory = [];
-    this._controllingPlayerId = null;
-    this._gameFrozen = false;
-    this._spyMode = false;
-    this.startGame();
-    this.toast('Game fully reset!');
-    this.updateDebugPanel();
-  },
-
-  debugSwapTeam(playerId) {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Host only'); return; }
-    const p = gs.players[playerId];
-    if (!p) return;
-    const oldTeam = p.team;
-    p.team = oldTeam === 0 ? 1 : 0;
-    this.toast(`${p.name} moved from T${oldTeam + 1} to T${p.team + 1}`);
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugPossessPlayer(playerId) {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Host only'); return; }
-    if (playerId === this.myPlayerId) { this.toast('Already your hand'); return; }
-    this._controllingPlayerId = playerId;
-    this.myHand = gs.hands[playerId] || [];
-    this.cancelSelection();
-    this.toast(`Now controlling P${playerId} ${gs.players[playerId]?.name || ''}`);
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugReleasePossess() {
-    if (!this.isHost) return;
-    const wasControlling = this._controllingPlayerId;
-    this._controllingPlayerId = null;
-    const gs = this.gameState;
-    if (gs && gs.hands) this.myHand = gs.hands[this.myPlayerId] || [];
-    this.cancelSelection();
-    this.toast('Released control');
-    this.renderGame();
-    this.updateDebugPanel();
-    if (wasControlling !== null && gs && this.isBotPlayer(gs.currentTurn)) {
-      this.triggerBotPlay();
-    }
-  },
-
-  debugToggleFreeze() {
-    if (!this.isHost) { this.toast('Host only'); return; }
-    this._gameFrozen = !this._gameFrozen;
-    if (this._gameFrozen) {
-      this.stopTurnTimer();
-    } else {
-      this.startTurnTimer();
-    }
-    this.toast(this._gameFrozen ? 'Game FROZEN — all players paused' : 'Game UNFROZEN — resuming');
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugToggleSpy() {
-    if (!this.isHost) { this.toast('Host only'); return; }
-    this._spyMode = !this._spyMode;
-    this.toast(this._spyMode ? 'Spy Mode ON — seeing all hands' : 'Spy Mode OFF');
-    this.renderGame();
-    this.updateDebugPanel();
-  },
-
-  debugSetWinScore() {
-    const gs = this.gameState;
-    if (!gs || !this.isHost) { this.toast('Host only'); return; }
-    const val = parseInt(document.getElementById('debug-win-score')?.value || 21);
-    if (isNaN(val) || val < 1) { this.toast('Invalid score'); return; }
-    gs.winScore = val;
-    this.winScore = val;
-    this.toast(`Win score set to ${val}`);
-    this.broadcastGameState();
-    this.renderGame();
-    this.updateDebugPanel();
+    this.busy(document.getElementById('match-again'), () => this.ask('rematch'));
   },
 };
 

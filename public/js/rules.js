@@ -1,5 +1,5 @@
 /* Pure game rules: capture legality, the bot's move choice and round scoring.
- * No DOM, no Firebase, no app state: every function takes plain card objects
+ * No DOM, no network, no app state: every function takes plain card objects
  * ({ id, suit, name, value }) and returns plain data, so the same code runs in the
  * browser (window.ChkobaRules) and under node:test (require('./js/rules.js')). */
 (function (root, factory) {

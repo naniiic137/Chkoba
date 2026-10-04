@@ -469,7 +469,6 @@ html.reduce .fx-slam .word span { animation: none; }
    ========================================================================== */
 .menu-stack .input { text-align: center; }
 .menu-foot a { color: inherit; }
-.config-error { background: color-mix(in srgb, var(--mult) 25%, transparent); color: var(--text); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 13px; text-align: center; width: min(100%, 360px); box-shadow: inset 0 0 0 2px var(--mult); }
 
 .slot .btns { margin-left: auto; display: flex; gap: 6px; }
 .slot .btns .pill { padding: 6px 9px 7px; font-size: 12px; }
@@ -504,11 +503,9 @@ html.reduce .fx-slam .word span { animation: none; }
 #emote-bar .pill { padding: 5px 10px 6px; font-size: 12px; }
 #emote-display { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 45; font-family: var(--font-display); font-size: 16px; letter-spacing: .04em; padding: 8px 14px; border-radius: var(--radius-sm); background: var(--plate); color: var(--plate-ink); box-shadow: 0 var(--drop) 0 var(--drop-color); animation: framePop .3s var(--spring); }
 
-/* spy mode text list (host debug) sits under the opponent's meta */
-.opp .spy { display: flex; flex-wrap: wrap; gap: 3px; }
-.opp .spy span { font-family: var(--font-num); font-size: 11px; padding: 1px 5px; border-radius: 3px; background: rgba(0,0,0,.3); color: var(--gold); }
-.opp.controlled { box-shadow: inset 0 0 0 2px var(--gold), 0 var(--drop) 0 var(--drop-color); }
-.opp .ctrl { font-size: 10px; color: var(--gold); letter-spacing: .1em; }
+/* a player whose connection dropped */
+.opp.away { opacity: .7; }
+.opp .name .badge { font-size: 9px; padding: 2px 5px 3px; vertical-align: middle; }
 
 /* opponent's turn label inside the card */
 .opp .turnfill { font-size: 11px; letter-spacing: .1em; }
@@ -534,7 +531,20 @@ html.reduce .fx-slam .word span { animation: none; }
 .resume-actions .pill { flex: 1; }
 
 /* a player dropped out of an online game */
-.away-banner { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 46; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px); padding: 8px 12px; border-radius: var(--radius-sm); background: var(--panel); box-shadow: inset 0 0 0 2px var(--mult), 0 var(--drop) 0 var(--drop-color); font-size: 13px; }
+.away-banner { position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 46; display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 8px 10px; width: max-content; max-width: calc(100% - 24px); padding: 8px 12px; border-radius: var(--radius-sm); background: var(--panel); box-shadow: inset 0 0 0 2px var(--mult), 0 var(--drop) 0 var(--drop-color); font-size: 13px; }
 .away-banner[hidden] { display: none; }
+.away-actions { display: flex; gap: 8px; }
 .away-banner .pill { flex: none; }
+
+/* this browser lost its connection: the room keeps the seat while it reconnects */
+.net-banner { position: fixed; left: 50%; top: calc(8px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 85; padding: 6px 14px; border-radius: 999px; background: var(--mult); color: #fff; font-family: var(--font-display); font-size: 13px; letter-spacing: .06em; box-shadow: 0 3px 0 rgba(0,0,0,.4); animation: netPulse 1.2s ease-in-out infinite alternate; }
+.net-banner[hidden] { display: none; }
+@keyframes netPulse { from { opacity: 1; } to { opacity: .65; } }
+
+/* a button waiting on the server: dimmed, with a small spinner, never stuck (it comes
+   back on the answer, an error or a timeout) */
+.pill.pending { opacity: .7; cursor: progress; }
+.pill.pending::after { content: ""; width: .8em; height: .8em; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; flex: none; }
+#hand-actions .pill.pending::after { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .left-text { color: var(--text-dim); font-size: 14px; line-height: 1.5; }

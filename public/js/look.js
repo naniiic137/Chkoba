@@ -3,7 +3,7 @@
  *            in the public state, every client applies what arrives. The host's last
  *            choice is also kept locally as the default for the next room.
  *   prefs  - labels, sound, screen shake, animations. Personal: never leave the browser.
- * Nothing here knows about Firebase; game.js calls setLook when a state arrives. */
+ * Nothing here knows about the network; game.js calls setLook when a state arrives. */
 (function (global) {
   'use strict';
   const html = document.documentElement;

@@ -11,7 +11,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;700&family=Lalezar&family=Rubik:wght@400;600;700;900&family=Cinzel:wght@700;900&family=Oswald:wght@500;700&family=Aref+Ruqaa:wght@700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/tokens.css">
   <link rel="stylesheet" href="css/game.css">
-  <link rel="stylesheet" href="css/debug.css">
 </head>
 <body>
   <canvas id="bg-shader" aria-hidden="true"></canvas>
@@ -27,7 +26,6 @@
         <span class="la">Chkobba</span>
         <span class="tag">Tunisian card game</span>
       </div>
-      <div id="config-error" class="config-error" hidden role="alert">Online play is unavailable: the server connection is not configured. Play vs bot still works.</div>
       <nav class="menu-stack">
         <div id="resume-box" class="resume-box" hidden role="region" aria-label="Saved game">
           <span id="resume-text"></span>
@@ -157,7 +155,8 @@
         </div>
       </div>
       <div id="emote-display" hidden></div>
-      <div id="away-banner" class="away-banner" role="status" hidden><span id="away-text"></span><button class="pill sm gold" id="away-claim" hidden>Claim the win</button></div>
+      <div id="away-banner" class="away-banner" role="status" hidden><span id="away-text"></span><span class="away-actions"><button class="pill sm chip" id="away-bot" hidden>Bot plays</button><button class="pill sm gold" id="away-claim" hidden>Claim the win</button></span></div>
+      <div id="net-banner" class="net-banner" role="status" hidden>Reconnecting…</div>
     </section>
   </main>
 
@@ -216,7 +215,7 @@
     <div class="frame" style="width:min(100%,460px)">
       <div class="frame__title" id="left-title">A player left</div>
       <p id="left-text" class="left-text"></p>
-      <div class="actions"><button class="pill ghost" id="left-wait">Wait</button><button class="pill gold" id="left-claim">Claim the win</button></div>
+      <div class="actions"><button class="pill ghost" id="left-wait">Wait</button><button class="pill chip" id="left-bot">Let a bot play</button><button class="pill gold" id="left-claim">Claim the win</button></div>
     </div>
   </div>
 
@@ -242,31 +241,10 @@
 
   <div class="stage-fx" aria-hidden="true"><div class="fx-grain"></div><div class="fx-scanline"></div></div>
 
-  <input type="checkbox" id="debug-toggle" style="display:none" onchange="app.toggleDebug()">
-
-  <!-- ============ DEBUG PANEL (host only) ============ -->
-  <div id="debug-panel" class="debug-panel hidden">
-    <div class="debug-header">
-      <span>🔧 DEBUG MODE</span>
-      <div style="display:flex;gap:0.3rem;">
-        <button class="btn-debug-close" onclick="app.minimizeDebug()" title="Minimize">─</button>
-        <button class="btn-debug-close" onclick="app.toggleDebug()" title="Close">✕</button>
-      </div>
-    </div>
-    <div class="debug-tabs">
-      <button class="debug-tab active" data-tab="hands" onclick="app.switchDebugTab('hands')">Hands</button>
-      <button class="debug-tab" data-tab="table" onclick="app.switchDebugTab('table')">Table</button>
-      <button class="debug-tab" data-tab="deck" onclick="app.switchDebugTab('deck')">Deck</button>
-      <button class="debug-tab" data-tab="controls" onclick="app.switchDebugTab('controls')">Controls</button>
-    </div>
-    <div class="debug-body" id="debug-body"></div>
-  </div>
-
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" crossorigin="anonymous"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js" integrity="sha384-g5H2aNdtgRBYOBLsuOAuHvUXWnw4bswmU+tYjmGc1G3JfKxl79uWwV4sQarJsLwu" crossorigin="anonymous"></script>
-  <script src="firebase-config.js"></script>
+  <script src="server.js"></script>
   <script src="js/rules.js"></script>
+  <script src="js/room.js"></script>
+  <script src="js/net.js"></script>
   <script src="js/i18n.js"></script>
   <script src="js/shader.js"></script>
   <script src="js/fire.js"></script>
