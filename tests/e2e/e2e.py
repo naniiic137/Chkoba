@@ -261,7 +261,8 @@ def main():
                 away_flow(browser, base)
         finally:
             browser.close()
-    real = [e for e in errors if 'favicon' not in e]
+    # the away check sets a player offline on purpose: Chrome logs the failed reconnects
+    real = [e for e in errors if 'favicon' not in e and 'ERR_INTERNET_DISCONNECTED' not in e]
     if real:
         print('browser errors:')
         for e in real:
