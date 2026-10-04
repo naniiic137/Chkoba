@@ -1,5 +1,5 @@
-# Old home on Netlify: it serves the same static files as Cloudflare Pages, and online
-# play talks to the Cloudflare Worker (see public/server.js). No build step.
+# Old home on Netlify: everything forwards to the Cloudflare Pages site (the query string,
+# e.g. ?room=CODE, is kept). The static build below is only a fallback. No build step.
 [build]
   command = "echo static site, no build"
   publish = "public"
@@ -10,3 +10,9 @@
     X-Frame-Options = "DENY"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "no-referrer"
+
+[[redirects]]
+  from = "/*"
+  to = "https://chkooba.pages.dev/:splat"
+  status = 301
+  force = true

@@ -2,7 +2,7 @@
 
 **The classic Tunisian card game in the browser: play a bot offline, or share a link and play friends online in real time.**
 
-**▶ Play it online: _live link coming after the first Cloudflare deploy_** <!-- replace with the Worker or Pages URL, e.g. https://chkobba.<account>.workers.dev -->
+**▶ Play it online: [chkooba.pages.dev](https://chkooba.pages.dev/)**
 
 
 A multiplayer browser implementation of **Chkobba** (شكوبة), the popular Tunisian card game. A small game server is the referee: it shuffles, deals, checks every move and keeps score, and each player's browser only ever sees its own hand. The server runs on **Cloudflare Workers + Durable Objects** (free plan) or locally on Node. The page itself is vanilla HTML, CSS and JavaScript with no build step.
