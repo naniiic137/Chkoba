@@ -1,24 +1,19 @@
 # Dependencies
 node_modules/
 
-# Local Firebase config (generated at build time on Netlify from env vars)
-firebase-config.js
-
 # Environment files
 .env
 .env.*
 !.env.example
 
-# Firebase / npm debug logs
+# npm debug logs
 *.log
-firebase-debug.log
-firebase-debug.*.log
-database-debug.log
 npm-debug.log*
-.firebase/
 
-# Netlify local state
-.netlify/
+# Wrangler local state (wrangler dev, dry-run output)
+.wrangler/
+.dev.vars
+dist/
 
 # OS / editor files
 .DS_Store

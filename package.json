@@ -1,0 +1,24 @@
+{
+  "name": "chkobba",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Chkobba, the Tunisian card game: play a bot offline or friends online, with a server as the referee.",
+  "license": "UNLICENSED",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "dev:worker": "wrangler dev --port 8794",
+    "deploy": "wrangler deploy"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

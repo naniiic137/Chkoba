@@ -157,7 +157,7 @@
 
     // ================= TRANSPORT SIDE =================
     connect(send, close) {
-      const conn = { send, close: close || (() => {}), seat: -1, hits: [], lastEmote: 0 };
+      const conn = { send, close: close || (() => {}), seat: -1, hits: [], lastEmote: 0, lastSeen: this.now() };
       this.conns.add(conn);
       this.lastActive = this.now();
       return conn;
@@ -180,8 +180,21 @@
       if (!this._humansHere()) this._clearTimer('turn');   // nobody watching: the table waits
     }
 
+    // A phone that sleeps or loses signal can leave a socket open with nobody behind it.
+    // Clients ping every few seconds; a connection silent for maxSilenceMs is closed and
+    // its seat starts the hold. The transport calls this on an interval.
+    reap(maxSilenceMs) {
+      const now = this.now();
+      for (const c of [...this.conns]) {
+        if (now - c.lastSeen < maxSilenceMs) continue;
+        try { c.close(4002, 'No heartbeat'); } catch (e) { /* already gone */ }
+        this.disconnect(c);
+      }
+    }
+
     message(conn, raw) {
       if (this.closed || !this.conns.has(conn)) return;
+      conn.lastSeen = this.now();
       let msg = raw;
       if (typeof raw === 'string') {
         if (raw.length > MAX_MESSAGE) return;
