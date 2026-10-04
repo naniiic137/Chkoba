@@ -480,6 +480,8 @@ const app = {
     const net = this.net;
     this.net = null;
     if (net) net.close();
+    const done = this._helloDone; this._helloDone = null;
+    if (done) done();   // the button that opened this room comes back now
     if (this.localRoom) { this.localRoom.destroy(); this.localRoom = null; }
     this.snap = null; this._rev = -1;
     this.gameState = null; this._shown = null; this.myHand = []; this.myPlayerId = -1; this.isHost = false;
@@ -751,7 +753,8 @@ const app = {
   },
 
   localEnv() {
-    return { onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
+    // alone with a bot, the tally waits for the player's tap instead of moving on after 30 s
+    return { autoContinueMs: 0, onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
   },
 
   startLocalRoom(room, name, token) {

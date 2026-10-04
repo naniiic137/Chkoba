@@ -304,6 +304,15 @@ test('the tally moves on by itself when someone never taps continue', () => {
   assert.deepEqual(clients[1].state.ready, [0]);
   clock.tick(31000);
   assert.equal(room.gs.phase, 'playing');
+  // alone with a bot (autoContinueMs 0) the tally waits for the player's tap
+  const solo = makeRoom({ players: 2, speed: 'fast' }, { autoContinueMs: 0 });
+  const me = client(solo.room);
+  me.hello('P'); me.send('addBot', { slot: 1 }); me.send('start');
+  playUntil([me], solo.clock, () => solo.room.gs.phase === 'round_end');
+  solo.clock.tick(120000);
+  assert.equal(solo.room.gs.phase, 'round_end');
+  me.send('continue');
+  assert.equal(solo.room.gs.phase, 'playing');
 });
 
 test('only the owner changes the rules; surrender ends the match', () => {

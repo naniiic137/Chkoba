@@ -130,12 +130,14 @@
 
   class Room {
     // opts: room options (see normalizeOpts) plus code.
-    // env:  { clock, holdMs, onChange(room), onClose(room), log(level, ...args) }
+    // env:  { clock, holdMs, autoContinueMs (0: the tally waits for every tap), onChange(room),
+    //         onClose(room), log(level, ...args) }
     constructor(opts, env) {
       env = env || {};
       this.code = (opts && opts.code) || '';
       this.clock = env.clock || realClock;
       this.holdMs = env.holdMs !== undefined ? env.holdMs : HOLD_MS;
+      this.autoContinueMs = env.autoContinueMs !== undefined ? env.autoContinueMs : ROUND_END_AUTO_MS;
       this.onChange = env.onChange || null;
       this.onClose = env.onClose || null;
       this.log = env.log || (() => {});
@@ -395,7 +397,10 @@
       delay = delay || 0;
       const token = gs.gameToken, seq = gs.moveSeq;
       const same = () => this.gs === gs && gs.gameToken === token && gs.moveSeq === seq;
-      if (gs.phase === 'round_end') { this._setTimer('turn', delay + ROUND_END_AUTO_MS, () => { if (same()) this._nextRound(); }); return; }
+      if (gs.phase === 'round_end') {
+        if (this.autoContinueMs > 0) this._setTimer('turn', delay + this.autoContinueMs, () => { if (same()) this._nextRound(); });
+        return;
+      }
       if (gs.phase !== 'playing') return;
       if (gs.currentTurn < 0) {
         if (gs.hands.every((h) => h.length === 0)) this._setTimer('turn', delay + 400, () => { if (same()) this._endRound(); });
