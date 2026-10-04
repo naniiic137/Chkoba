@@ -1,0 +1,12 @@
+# Old home on Netlify: it serves the same static files as Cloudflare Pages, and online
+# play talks to the Cloudflare Worker (see public/server.js). No build step.
+[build]
+  command = "echo static site, no build"
+  publish = "public"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
