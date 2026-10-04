@@ -232,6 +232,7 @@ const app = {
     $('btn-place').addEventListener('click', () => this.placeCard());
     $('btn-cancel').addEventListener('click', () => this.cancelSelection());
     $('emote-bar').addEventListener('click', (e) => { const b = e.target.closest('[data-emote]'); if (b) this.sendEmote(b.dataset.emote); });
+    $('gm-emotes').addEventListener('click', (e) => { const b = e.target.closest('[data-emote]'); if (b) { this.toggleMenu(); this.sendEmote(b.dataset.emote); } });
     // side menu
     document.querySelectorAll('#ov-gamemenu .tabs button').forEach((b) => b.addEventListener('click', () => this.switchMenuTab(b.dataset.t)));
     $('gm-settings').addEventListener('click', (e) => { const b = e.target.closest('button[data-set]'); if (b) this.onMenuSetting(b.dataset.set, b.dataset.v); });
@@ -1170,6 +1171,7 @@ const app = {
   renderOpponents(gs) {
     const top = document.getElementById('opponents-top'), left = document.getElementById('opponent-left'), right = document.getElementById('opponent-right');
     top.innerHTML = ''; left.innerHTML = ''; right.innerHTML = '';
+    document.getElementById('game-view').dataset.players = gs.numPlayers;   // the phone layout seats 4 players differently
     if (!gs.players || !gs.players.length) return;
     const me = this.myPlayerId;
     if (gs.numPlayers === 2) {

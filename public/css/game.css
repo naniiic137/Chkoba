@@ -40,10 +40,11 @@ html.no-grain .fx-grain { display: none; }
 html.reduce * { animation-duration: 0s !important; animation-iteration-count: 1 !important; transition-duration: 0s !important; }
 
 /* ---- app + screens ---- */
-#app { position: relative; z-index: 1; height: 100%; }
+#app { position: relative; z-index: 1; height: 100%; height: 100dvh; }
 .screen { position: absolute; inset: 0; display: none; }
 .screen.active { display: flex; }
-.screen--center { align-items: flex-start; justify-content: center; padding: 24px; overflow-y: auto; }
+.screen--center { align-items: flex-start; justify-content: center; overflow-y: auto;
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
 .screen--center > .frame { margin: auto; }   /* centered when it fits, scrollable from the top when it does not */
 
 /* ---- type helpers ---- */
@@ -113,7 +114,10 @@ html[data-theme="c"] .pill.chip, html[data-theme="c"] .pill.green, html[data-the
 .actions > * { flex: 1; }
 
 /* ---- main menu ---- */
-#screen-menu { flex-direction: column; align-items: center; justify-content: center; gap: 28px; padding: 24px; }
+#screen-menu { flex-direction: column; align-items: center; justify-content: flex-start; gap: 28px; overflow-y: auto;
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+/* centered when it fits, scrollable from the top when it does not */
+#screen-menu > :first-child { margin-top: auto; } #screen-menu > :last-child { margin-bottom: auto; }
 .wordmark { text-align: center; line-height: 1; filter: drop-shadow(0 6px 0 rgba(0,0,0,.45)); }
 .wordmark .ar { font-family: var(--font-arabic); font-size: clamp(64px, 12vw, 132px); color: var(--gold); display: block; line-height: 1.05; }
 .wordmark .la { font-family: var(--font-display); text-transform: uppercase; letter-spacing: .18em; font-size: clamp(22px, 4vw, 38px); color: var(--text); display: block; margin-top: 6px; }
@@ -141,6 +145,7 @@ html[data-theme="c"] .pill.chip, html[data-theme="c"] .pill.green, html[data-the
    ========================================================================== */
 #screen-game { display: none; }
 #screen-game.active { display: block; }
+#screen-game { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 #game-view { position: relative; height: 100%; display: grid; grid-template-rows: auto 1fr; }
 #game-view[data-hud="rail"] { grid-template-rows: 1fr; grid-template-columns: 172px 1fr; }
 #hud { position: relative; z-index: 4; display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
@@ -164,7 +169,7 @@ html[data-theme="c"] .pill.chip, html[data-theme="c"] .pill.green, html[data-the
 #game-view[data-hud="top"] .hud-team { display: flex; align-items: baseline; gap: 6px; padding: 5px 10px; }
 #game-view[data-hud="top"] .hud-team .val { font-size: 18px; }
 .hud-turn { text-align: center; padding: 6px 4px; }
-.hud-gear { margin-left: auto; width: 40px; height: 40px; border-radius: var(--radius-sm); background: var(--panel); box-shadow: inset 0 0 0 2px var(--panel-rim), 0 var(--drop) 0 var(--drop-color); display: grid; place-items: center; font-size: 18px; }
+.hud-gear { margin-left: auto; width: 44px; height: 44px; flex: none; border-radius: var(--radius-sm); background: var(--panel); box-shadow: inset 0 0 0 2px var(--panel-rim), 0 var(--drop) 0 var(--drop-color); display: grid; place-items: center; font-size: 18px; }
 #game-view[data-hud="rail"] .hud-gear { margin: auto 0 0; width: 100%; }
 .hud-spacer { flex: 1; }
 
@@ -223,7 +228,7 @@ html[data-theme="c"] .pill.chip, html[data-theme="c"] .pill.green, html[data-the
 #my-captured b { color: var(--gold); font-family: var(--font-num); font-size: 15px; }
 #hand-cards { gap: clamp(8px, 1.4vw, 16px); padding-top: 12px; }   /* room for a lifted card under the labels */
 #hand-actions { display: flex; gap: 10px; min-height: 52px; align-items: center; }
-#hand-actions .pill { min-width: 128px; }
+#hand-actions .pill { min-width: 128px; min-height: 48px; }
 
 /* ============================================================================
    CARD
@@ -358,8 +363,10 @@ html.reduce .fx-slam .word span { animation: none; }
 /* ============================================================================
    OVERLAYS
    ========================================================================== */
-.overlay { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(4,8,14,.62); backdrop-filter: blur(3px); }
+.overlay { position: fixed; inset: 0; z-index: 50; display: none; align-items: flex-start; justify-content: center; overflow-y: auto; background: rgba(4,8,14,.62); backdrop-filter: blur(3px);
+  padding: max(16px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
 .overlay.open { display: flex; }
+.overlay > .frame { margin: auto; }   /* centered when it fits, scrollable when it does not */
 .overlay .frame { animation: framePop .34s var(--spring); }
 @keyframes framePop { 0% { transform: scale(.86) translateY(20px); opacity: 0; } 100% { transform: none; opacity: 1; } }
 
@@ -421,7 +428,7 @@ html.reduce .fx-slam .word span { animation: none; }
 .dt span.t1 { background: var(--team1); color: #fff; } .dt span.t2 { background: var(--team2); color: #fff; }
 
 /* toast */
-#toast { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 80; font-family: var(--font-display); font-size: 14px; letter-spacing: .06em; padding: 10px 16px; border-radius: var(--radius-sm); background: var(--panel); box-shadow: inset 0 0 0 2px var(--panel-rim), 0 var(--drop) 0 var(--drop-color); opacity: 0; pointer-events: none; transition: opacity .2s, transform .3s var(--spring); }
+#toast { position: fixed; left: 50%; top: calc(18px + env(safe-area-inset-top)); max-width: calc(100% - 24px); text-align: center; transform: translateX(-50%); z-index: 80; font-family: var(--font-display); font-size: 14px; letter-spacing: .06em; padding: 10px 16px; border-radius: var(--radius-sm); background: var(--panel); box-shadow: inset 0 0 0 2px var(--panel-rim), 0 var(--drop) 0 var(--drop-color); opacity: 0; pointer-events: none; transition: opacity .2s, transform .3s var(--spring); }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(4px); }
 
 /* ============================================================================
@@ -500,7 +507,7 @@ html.reduce .fx-slam .word span { animation: none; }
 
 /* emotes */
 #emote-bar { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
-#emote-bar .pill { padding: 5px 10px 6px; font-size: 12px; }
+#emote-bar .pill { padding: 0 12px; min-height: 44px; font-size: 12px; }
 #emote-display { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 45; font-family: var(--font-display); font-size: 16px; letter-spacing: .04em; padding: 8px 14px; border-radius: var(--radius-sm); background: var(--plate); color: var(--plate-ink); box-shadow: 0 var(--drop) 0 var(--drop-color); animation: framePop .3s var(--spring); }
 
 /* a player whose connection dropped */
@@ -511,7 +518,7 @@ html.reduce .fx-slam .word span { animation: none; }
 .opp .turnfill { font-size: 11px; letter-spacing: .1em; }
 
 @media (max-width: 640px) {
-  #emote-bar .pill { padding: 4px 8px 5px; font-size: 11px; }
+  #emote-bar .pill { padding: 0 9px; font-size: 11px; }
   .overlay.side .frame { width: 100%; }
 }
 
@@ -548,3 +555,121 @@ html.reduce .fx-slam .word span { animation: none; }
 #hand-actions .pill.pending::after { display: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .left-text { color: var(--text-dim); font-size: 14px; line-height: 1.5; }
+
+/* ============================================================================
+   PHONES
+   Portrait: one compact HUD row, the opponents of a 4-player game side by side
+   above the table (never on top of it), the hand and its buttons below.
+   Landscape (a short screen): one HUD row, smaller cards, and the action buttons
+   beside the hand so nothing stacks past the bottom edge.
+   ========================================================================== */
+.overlay.side > .frame { margin: 0 0 0 auto; padding-top: max(22px, env(safe-area-inset-top)); padding-bottom: max(22px, env(safe-area-inset-bottom)); }
+.gm-emotes { display: flex; flex-wrap: wrap; gap: 6px; }
+.gm-emotes .pill { flex: 1; min-height: 44px; }
+.hud-team .lbl { max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 640px) {
+  #game-view #hud { gap: 6px; padding: 6px 10px 2px; }
+  #game-view .hud-deck { display: none; }          /* the deck pile on the table shows the count */
+  #game-view .hud-box { padding: 6px 9px; }
+  #game-view .hud-team { padding: 6px 9px; }
+  #game-view .hud-team .lbl { max-width: 6.5em; }
+  .hud-turn { padding: 0 2px 2px; }
+  .hud-turn .fill.lg { font-size: 20px; }
+
+  /* the board as one grid: [left | top | right] / table / hand. #play-area steps
+     aside so a 4-player game seats its three opponents in one row */
+  #game-board { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "left top right" "table table table" "hand hand hand"; column-gap: 6px; align-content: stretch; padding: 4px 8px 8px; }
+  #play-area { display: contents; }
+  #opponents-top { grid-area: top; padding: 2px 0; }
+  #opponent-left { grid-area: left; justify-content: flex-end; }
+  #opponent-right { grid-area: right; justify-content: flex-start; }
+  #table-area { grid-area: table; align-self: center; }
+  #hand-area { grid-area: hand; }
+  #game-view[data-players="4"] .opp { flex-direction: column; gap: 3px; padding: 6px 7px; text-align: center; min-width: 0; }
+  #game-view[data-players="4"] .opp .av { width: 26px; height: 26px; font-size: 10px; }
+  #game-view[data-players="4"] .opp .meta { align-items: center; }
+  #game-view[data-players="4"] .opp .name { font-size: 12px; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #game-view[data-players="4"] .opp .cap { font-size: 10px; }
+  .opp .backs .card-back.mini { width: 20px; height: 28px; }
+
+  #hand-actions { min-height: 48px; }
+  #emote-bar { gap: 5px; }
+}
+@media (max-width: 420px) {
+  #game-view .hud-wordmark { display: none; }
+  #game-view .hud-team .shk { display: none; }   /* the chkobba count is on the player panels too */
+}
+
+@media (max-height: 500px) and (orientation: landscape) {
+  :root { --card-w: clamp(46px, 7.4vw, 60px); --lift: calc(-8px * var(--juice-k)); }
+
+  /* menu: the wordmark on the left, the buttons on the right */
+  #screen-menu { display: none; }
+  #screen-menu.active { display: grid; grid-template-columns: 1fr minmax(260px, 340px); grid-template-areas: "hero stack" "word stack" "foot stack";
+    align-content: center; justify-content: center; column-gap: 40px; row-gap: 10px; }
+  #screen-menu > :first-child, #screen-menu > :last-child { margin: 0; }
+  .hero-cards { grid-area: hero; justify-self: center; }
+  .hero-cards .card { --card-w: 52px; }
+  .wordmark { grid-area: word; }
+  .wordmark .ar { font-size: 64px; }
+  .wordmark .la { font-size: 22px; }
+  .menu-stack { grid-area: stack; align-self: center; width: 100%; gap: 8px; }
+  .menu-stack .pill.big { font-size: 16px; padding: 12px 16px; min-height: 44px; }
+  .menu-stack .input { padding: 9px 12px; font-size: 16px; }
+  .menu-foot { grid-area: foot; text-align: center; }
+
+  /* frames: tighter so the lobby and the tallies fit a short screen */
+  .frame { padding: 14px 16px; }
+  .frame__title { font-size: 18px; margin-bottom: 8px; }
+  .code { font-size: 28px; }
+  #screen-waiting .plate { margin: 8px 0 !important; padding: 6px 12px; }
+  .slots { gap: 6px; }
+  .waiting-note { margin-top: 6px; }
+  .slot { min-height: 46px; padding: 6px 10px; }
+  .actions { margin-top: 10px; }
+  .cer-head { margin-bottom: 6px; }
+  .cer-teams { margin-bottom: 4px; }
+  .cer-team { padding: 3px; font-size: 12px; }
+  .cer-lines { gap: 4px; }
+  .cer-line .fill { font-size: 15px; }
+  .cer-box { font-size: 18px; padding: 5px 10px 6px; }
+  .cer-total { margin-top: 8px; padding-top: 8px; }
+  .cer-total .cer-box { font-size: 26px; padding: 7px; }
+  .cer-skip { margin-top: 6px; }
+  .match-score { font-size: 44px; margin: 8px 0; }
+
+  /* game: one HUD row with the turn in it */
+  #game-view #hud { flex-wrap: nowrap; gap: 6px; padding: 4px 10px; }
+  #game-view .hud-wordmark { display: none; }
+  #game-view .hud-box, #game-view .hud-team { padding: 5px 9px; }
+  .hud-turn { order: 0; width: auto; flex: 1; min-width: 0; padding: 0; overflow: hidden; white-space: nowrap; }
+  .hud-turn .fill.lg { font-size: 18px; }
+  .hud-spacer { display: none; }
+  #game-board { grid-template-rows: auto minmax(0, 1fr) auto; padding: 0 10px 4px; }
+  #opponents-top { padding: 0; }
+  .opp { padding: 4px 10px; gap: 8px; }
+  .opp .av { width: 26px; height: 26px; font-size: 10px; }
+  .opp:not(.side) .meta { flex-direction: row; align-items: center; gap: 10px; }
+  .opp.side { padding: 6px; gap: 4px; }
+  .opp.side .meta { align-items: center; }
+  .opp .backs .card-back.mini { width: 18px; height: 26px; }
+  #table-area { min-height: 0; padding: 2px 0 16px; gap: 14px; }
+  .deck-pile { --card-w: 38px; }
+  .deck-count { font-size: 11px; bottom: -17px; }
+  .table-center { gap: 2px; }
+  #table-area .card-row { gap: 6px; }
+  #table-msg { font-size: 12px; }
+
+  /* the hand in the middle, who-I-am on the left, the buttons on the right */
+  #hand-area { display: grid; grid-template-columns: minmax(0, .6fr) auto minmax(0, 1.4fr); grid-template-areas: "label hand actions" "cap hand actions";
+    align-items: center; column-gap: 14px; row-gap: 2px; padding-top: 0; }
+  #player-label { grid-area: label; justify-self: end; align-self: end; }
+  #my-captured { grid-area: cap; justify-self: end; align-self: start; }
+  #hand-cards { grid-area: hand; padding-top: 10px; }
+  #hand-actions { grid-area: actions; justify-self: start; min-height: 48px; width: auto; }
+  #hand-actions .pill { min-width: 0; flex: none; padding: 0 16px; font-size: 15px; }
+  #emote-bar { display: none; }   /* emotes are in the game menu on a short screen */
+  #emote-display { top: 52px; }
+}
