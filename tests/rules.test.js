@@ -1,7 +1,7 @@
 // Unit tests for the pure rules module. Run with: node --test
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const R = require('../js/rules.js');
+const R = require('../public/js/rules.js');
 
 const VALUES = { ace: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, queen: 8, jack: 9, king: 10 };
 const SUITS = ['hearts', 'diamonds', 'clubs', 'spades'];
