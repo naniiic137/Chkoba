@@ -2,10 +2,10 @@
 
 **The classic Tunisian card game in the browser: play a bot offline, or share a link and play friends online in real time.**
 
-**▶ Play it online: [chkooba.netlify.app](https://chkooba.netlify.app)**
+**▶ Play it online: _live link coming after the first Cloudflare deploy_** <!-- replace with the Worker or Pages URL, e.g. https://chkobba.<account>.workers.dev -->
 
 
-A multiplayer browser implementation of **Chkobba** (شكوبة), the popular Tunisian card game. Online games sync through Firebase Realtime Database, so they work across any network with no game server to run. It is written in vanilla HTML, CSS and JavaScript with no build step, and it deploys to any static host (Netlify, Vercel, GitHub Pages).
+A multiplayer browser implementation of **Chkobba** (شكوبة), the popular Tunisian card game. A small game server is the referee: it shuffles, deals, checks every move and keeps score, and each player's browser only ever sees its own hand. The server runs on **Cloudflare Workers + Durable Objects** (free plan) or locally on Node. The page itself is vanilla HTML, CSS and JavaScript with no build step.
 
 <p align="center">
   <img src="docs/screenshots/game-table.jpg" alt="A game in progress against the bot: table cards in the middle, the player's hand at the bottom, scores and round counter in the top bar" width="100%">
@@ -22,14 +22,15 @@ A multiplayer browser implementation of **Chkobba** (شكوبة), the popular Tu
 
 ## Features
 
-- **Play vs bot** with three difficulty levels (easy, medium, hard). Works offline, with no Firebase needed, and no name is required (you play as "Player"). A bot game is saved in the browser after every move, so a reload or a closed tab offers **Resume game** on the menu.
-- **Online multiplayer** for 2 players, or 4 players in two teams. The host shares a room code or link, and empty seats can be filled with bots. If a player drops out mid-game, the host is told and can **wait** (the player rejoins with the same name and room code) or **claim the win**.
+- **Play vs bot** with three difficulty levels (easy, medium, hard). It runs entirely in the browser with no server and no network, and no name is required (you play as "Player"). A bot game is saved after every move, so a reload or a closed tab offers **Resume game** on the menu.
+- **Online multiplayer** for 2 players, or 4 players in two teams. Share the room code or the invite link; empty seats can be filled with bots. No account and no keys needed.
+- **Drops and reloads are fine.** A reload puts you back in the same seat with the same hand. If someone's connection drops, their seat is kept for 60 seconds; after that the others can **let a bot play** the seat, **claim the win**, or keep waiting. A player who comes back gets their seat back, even from the bot.
 - **Room options:** win at 5, 11, 21 or 31 points; turn timer (off, or 10 to 60 s); game speed; force capture; capture assist.
 - **Looks:** three themes (Felt, Balatro, Noir), three card styles (Photo, Flat, Pixel) and two suit sets (French, Coins). The host's choice applies to the whole room.
 - **Personal settings:** screen shake, animations, sound, and labels in Latin, Arabic + Latin, or English.
 - **Game feel:** animated deals, card flights, a "chkobba" slam effect, a scored round-end tally and emotes.
 - **Card info panel:** long-press, right-click or press `i` on a face-up card to see its value, what it scores and what it can take right now.
-- **Host debug panel** for testing: see all hands, the deck, force turns, deals and scores.
+- **Phones:** laid out for portrait and landscape, with tap targets of at least 44 px and the notch and home bar kept clear.
 
 ## Rules (summary)
 
@@ -38,7 +39,7 @@ A multiplayer browser implementation of **Chkobba** (شكوبة), the popular Tu
 - **Card values:** Ace = 1, 2 to 7 = face value, Queen = 8, Jack = 9, King = 10.
 - **Deal:** the first deal puts 4 cards face up on the table and gives each player 3 cards. Later deals give 3 cards per player only.
 - **Play:** on your turn, play one card. Either **place** it on the table, or **capture** table cards whose values add up to its value.
-- **Equal card first:** if a table card has the same value as the card you play, you must take that card; a sum is only allowed when no equal card is on the table (7♥ 3♦ 4♣ on the table and a 7 in hand: the 7 takes 7♥, never 3♦+4♣). The host checks this for every move, including the bot's and online players', and a refused move lights up the card you have to take.
+- **Equal card first:** if a table card has the same value as the card you play, you must take that card; a sum is only allowed when no equal card is on the table (7♥ 3♦ 4♣ on the table and a 7 in hand: the 7 takes 7♥, never 3♦+4♣). The referee checks this for every move, including the bot's, and a refused move lights up the card you have to take.
 - **Force capture** (room option): while any card in your hand has an equal card on the table, you cannot place a card; you must take it.
 - **Chkobba:** clearing the table with a capture scores +1 right away. The dealer cannot score a chkobba on the last card of a round.
 - **Deals and rounds:** one round is a whole 40-card deck, played as several deals of 3 cards each (6 deals with 2 players, 3 with 4). The top bar shows the current deal, for example `DEAL 4/6`.
@@ -59,120 +60,130 @@ A multiplayer browser implementation of **Chkobba** (شكوبة), the popular Tu
 - Double-click a hand card to place it directly (when no capture is required).
 - Long-press, right-click or press `i` on a face-up card to open its info panel.
 
-## How multiplayer sync works
+## How online play works
 
-There is no game server. One browser, the **host**, is the referee, and Firebase Realtime Database is the shared message bus.
+The server is the referee. Each room is one instance of `public/js/room.js`, a referee with no network code of its own: on Cloudflare it lives in a Durable Object (one per room code), locally it lives in a `Map` in `server.js`. Browsers talk to it over a plain WebSocket.
 
 ```
- guest browser                    Firebase RTDB  rooms/<CODE>/                 host browser
- ─────────────                    ──────────────────────────                 ────────────
- push move ─────────────────────▶ moves/<pushId>  {playerId, cardId,  ──────▶ child_added:
-                                                   captureCardIds, ts}         validate turn + card,
-                                                                               apply rules, score,
- on('value') ◀──────────────────── state          (public: table, turn,  ◀──── write state
- on('value') ◀──────────────────── hand_<myId>     scores, deck count)   ◀──── write each hand
-                                   players, host, log, emote
+ browser (seat 1)                         room CODE (Durable Object)                 browser (seat 0)
+ ────────────────                         ──────────────────────────                 ────────────────
+ move {game, seq, cardId, captureIds} ──▶ check: turn, card in hand, legal capture
+                                          apply, score, run bot seats, timers
+ state: public table + MY hand only  ◀─── one snapshot per seat after every change ───▶ public table + MY hand only
+ ack {ok | error, reason, mustTake}  ◀───
 ```
 
-- **Host-authoritative state.** The host runs the game logic: dealing, turns, capture validation and scoring. A guest never changes the game state itself. It pushes a move to `rooms/<code>/moves`. The host listens with `child_added`, deletes each move node once it has read it, rejects moves that are out of turn or play a card the player does not hold, and then writes the new state back.
-- **Split state.** The shared `state` node carries only public data: table cards, whose turn it is, scores, the deck *count* and the last move. Each hand is written to its own `hand_<i>` path, and each client subscribes only to its own hand.
-- **Atomic seat claiming.** Joining uses a Firebase `transaction` on `players`, so two people joining at the same time cannot take the same seat. `onDisconnect()` frees a seat when a guest's connection drops.
-- **Presence.** Every human seat writes `rooms/<code>/presence/<slot>` while it is connected (`onDisconnect` removes it, `.info/connected` re-arms it after a network blip). A seat that stays offline for more than 3 seconds counts as gone: the host gets a "wait or claim the win" prompt, and other players see a banner. A dropped player can rejoin a started game with the same name; strangers still cannot.
-- **Stale-update protection.** Every game gets a `gameToken`, and every move increments `moveSeq`. Clients use these to ignore updates from an older game and to animate each move exactly once. Bot moves are scheduled with a delay and re-checked against the token and turn before they run.
-- **Diff-driven rendering.** State updates can arrive several at a time. The renderer only marks the board as dirty. A render pump compares what is on screen with the latest state, plays the animation for the difference, then repaints. Pending renders collapse into the latest state.
-- **Link-based joining.** The host shares a URL with `?room=XXXX` (or just the code), and players open it and join.
+- **Server-authoritative.** The room shuffles with crypto randomness, deals, validates every move (whose turn it is, that the card is in that player's hand, that the capture is legal), scores, and plays bot seats with natural delays. Clients only send intentions.
+- **Private hands.** After every change each seat receives a snapshot of the public state plus its own hand. No browser ever receives another hand or the deck order, so nobody can cheat by reading the network, not even the host.
+- **The host is just whoever set up the room.** The host picks the options, adds bots and presses Start. If the host leaves, lobby control passes to the next player and the game goes on.
+- **Sequence numbers.** Every move carries the game token and the move number it was made on, so a retried or out-of-date move is ignored instead of played twice.
+- **Requests always settle.** `public/js/net.js` sends requests with acks, pings every 8 seconds, reconnects with backoff, and asks for a full snapshot after any drop or timeout. Every button that waits on the server shows it, then comes back on the answer, an error or a timeout.
+- **Seats.** Claiming a seat is atomic (the room handles one message at a time). Each seat gets a token stored in `localStorage` for that room, so a reload resumes the same seat and hand. A dropped seat is held for 60 seconds, then the others decide: a bot plays it, or the game ends with a win for the side still there.
+- **Invite links.** `location.origin + '/?room=CODE'`, with a Copy button in the waiting room and the game menu.
+- **Play vs bot** runs the very same `room.js` inside the page through a local transport, so the offline game and the online game share one referee.
 
-## Quick start
+## Run locally
 
-### Run locally
+Node 18 or newer:
 
 ```bash
-python -m http.server 8090
-# or: npx http-server -p 8090
+npm install
+npm start          # http://localhost:3110  (PORT=8080 npm start to change it)
 ```
 
-Then open <http://localhost:8090>. Without a `firebase-config.js`, only **Play vs bot** works, and the menu shows a notice. For online play, copy `firebase-config.example.js` to `firebase-config.js` and fill in your project's values (see below). A local `firebase-config.js` with an `emulator: { host, port }` entry points the app at the Realtime Database emulator.
+`npm start` serves `public/` and the game rooms from one Node process (`server.js`, express + ws). Open the page in two browser windows to play yourself.
 
-### Set up Firebase
+To run the Cloudflare version locally instead (no account needed):
 
-1. In the [Firebase Console](https://console.firebase.google.com/), create a project.
-2. Add a **Realtime Database**. Do **not** leave it in "test mode": test mode lets anyone on the internet read every hand and overwrite any game. Publish the rules from `database.rules.json` instead (**Realtime Database → Rules → paste the file contents → Publish**).
-3. Go to **Project Settings → General → Your apps → Add app → Web** and copy the `firebaseConfig` object.
-4. Put it in `firebase-config.js` for local use. For Netlify, use environment variables (see below).
+```bash
+npx wrangler dev --port 8794
+```
 
-## Deploy
+## Deploy to Cloudflare
 
-The repo includes a `netlify.toml`:
+Both parts run on the free plan. No keys or environment secrets are needed.
 
-1. Import the repo on [Netlify](https://app.netlify.com/) (**Add new site → Import an existing project**).
-2. Set these environment variables: `FIREBASE_apiKey`, `FIREBASE_authDomain`, `FIREBASE_databaseURL`, `FIREBASE_projectId`, `FIREBASE_storageBucket`, `FIREBASE_messagingSenderId`, `FIREBASE_appId`, and optionally `FIREBASE_measurementId`.
-3. Deploy. The build command (`node scripts/generate-config.js`) writes `firebase-config.js` from those variables and publishes the repo root as a static site. `netlify.toml` also sets basic security headers (`X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`).
+**1. The Worker (game server + the site).** In the Cloudflare dashboard: **Workers & Pages → Create application → Continue with GitHub** → pick this repo. Project name: `chkobba`. Deploy command: `npx wrangler deploy`. `wrangler.jsonc` already declares the static assets (`public/`), the `Room` Durable Object and its migration. Once deployed, the whole game works at `https://chkobba.<your-account>.workers.dev`.
 
-Any other static host works too, as long as it serves a `firebase-config.js`.
+**2. Optional: a Pages copy of the site.** **Workers & Pages → Create application → Continue to Pages** → pick this repo. Framework preset: **None**. Build command: leave empty. Build output directory: `public`. On a `*.pages.dev` host, `public/server.js` points the page at the Worker (`https://chkobba.hamza-benismail-6.workers.dev`), so the rooms still run in the Worker.
+
+If Cloudflare gives the Pages site a name other than `chkobba.pages.dev`, add that host to `ALLOWED_HOSTS` in `wrangler.jsonc` (comma-separated; subdomains such as preview deploys are included) and redeploy the Worker. If the Worker's own URL is different, change it in `public/server.js`.
+
+The Worker only accepts `/api/*` and `/ws` requests from pages with no `Origin`, its own origin, `localhost`/`127.0.0.1`, or an `https` host listed in `ALLOWED_HOSTS` (or a subdomain of one). Any other site gets `403`.
 
 ## Security note
 
-The Firebase web config (`apiKey`, `databaseURL`, etc.) is sent to every browser and is **not a secret**. It identifies the project but does not grant access. Access is controlled by the database rules in `database.rules.json`: global reads and writes are denied, only `rooms/<code>` is reachable, and move payloads are validated.
+- Hands and the deck order exist only on the server (or, for a bot game, in your own browser). A modified client can only send moves, and every move is checked.
+- Room codes are 8 crypto-random characters; seat tokens are 128-bit random values kept in `localStorage`.
+- Rooms live in memory and in their Durable Object's storage, which is deleted after everyone leaves or after 6 hours unused. Nothing else is stored.
 
-Known limits, documented honestly in [`docs/AUDIT.md`](docs/AUDIT.md):
-
-- A client that knows a room code can still read another player's `hand_i` directly. True at-rest hand privacy needs Firebase Anonymous Auth and per-user rules.
-- The host is a browser, so a modified host client could cheat. Real cheat resistance would need server-side authority (for example Cloud Functions).
+The older audit of the Firebase version is kept in [`docs/AUDIT.md`](docs/AUDIT.md), with a note on what the server move fixed.
 
 ## Project structure
 
 ```
 chkoba/
-├── index.html                # Single-page app: menu, options, join, waiting room, game, overlays
-├── game.js                   # Host authority, Firebase networking and presence, bots, bot-game save, render queue + animation
-├── css/
-│   ├── tokens.css            # Design tokens and the three themes (html[data-theme])
-│   ├── game.css              # Layout, frames and pills, cards, text-fill, effects, overlays
-│   └── debug.css             # Host debug panel and banners
-├── js/
-│   ├── rules.js              # Pure rules: legal captures, move check, bot move, round scoring (browser + Node)
-│   ├── i18n.js               # Labels (Latin / Arabic / English) and rule text
-│   ├── shader.js             # WebGL swirl background (themes that use one)
-│   ├── fire.js               # Pixel fire for the chkobba slam and the tally
-│   ├── juice.js              # Motion: tags, slam, flights, count-ups, shake, text-fill, sounds
-│   ├── cards.js              # Card renderer: photo / flat / pixel, French or coin suits
-│   └── look.js               # Room look (host-owned) and personal comfort settings
-├── images/                   # 40 PNG card faces ({name}_of_{suit}[2].png; face cards use the "2" suffix)
-├── firebase-config.example.js
-├── database.rules.json       # Realtime Database security rules
-├── netlify.toml              # Build command + security headers
-├── scripts/generate-config.js
-├── tests/rules.test.js       # node:test unit tests for js/rules.js
-├── experimentals/            # Standalone UI lab used to design the current look (no Firebase)
+├── public/                   # Everything the browser loads (served by the Worker or by npm start)
+│   ├── index.html            # Single-page app: menu, options, join, waiting room, game, overlays
+│   ├── server.js             # Where the game server is (the Pages copy points at the Worker)
+│   ├── game.js               # Client: screens, snapshots, render queue + animation, requests to the room
+│   ├── css/
+│   │   ├── tokens.css        # Design tokens and the three themes (html[data-theme])
+│   │   └── game.css          # Layout (phones included), frames and pills, cards, effects, overlays
+│   ├── js/
+│   │   ├── rules.js          # Pure rules: legal captures, move check, bot move, round scoring
+│   │   ├── room.js           # The referee: seats, dealing, turns, scoring, bots, timers, snapshots
+│   │   ├── net.js            # WebSocket client (acks, heartbeat, reconnect) + the local transport
+│   │   ├── i18n.js           # Labels (Latin / Arabic / English) and rule text
+│   │   ├── shader.js         # WebGL swirl background (themes that use one)
+│   │   ├── fire.js           # Pixel fire for the chkobba slam and the tally
+│   │   ├── juice.js          # Motion: tags, slam, flights, count-ups, shake, text-fill, sounds
+│   │   ├── cards.js          # Card renderer: photo / flat / pixel, French or coin suits
+│   │   └── look.js           # Room look (host-owned) and personal comfort settings
+│   └── images/               # 40 PNG card faces
+├── worker/index.js           # Cloudflare Worker: assets, POST /api/rooms, /ws -> Room Durable Object
+├── wrangler.jsonc            # Worker config: assets, Durable Object binding and migration, ALLOWED_HOSTS
+├── server.js                 # Local server: express static + ws rooms (npm start)
+├── src/origin.js             # Origin allowlist shared by the Worker and the local server
+├── tests/
+│   ├── rules.test.js         # Rules and scoring
+│   ├── room.test.js          # The referee: hidden hands, illegal and stale moves, seats, teams, holds
+│   ├── server.test.js        # The local server over real HTTP and WebSockets
+│   └── e2e/e2e.py            # Playwright end-to-end flows (see Tests)
+├── experimentals/            # Standalone UI lab used to design the current look
 └── docs/
-    ├── AUDIT.md              # Code and security audit
+    ├── AUDIT.md              # Code and security audit (of the Firebase version)
     └── screenshots/
 ```
 
 ### Key design decisions
 
-- **Firebase Realtime Database instead of WebRTC/PeerJS:** no NAT problems and no signaling server to deploy. Firebase handles real-time sync over WebSockets and reconnects automatically.
-- **Host-authoritative logic in the browser:** no backend to run or pay for. The trade-offs are listed in the security note above.
+- **A Durable Object per room:** one single-threaded referee per game, close to the first player, with no database to run. Sockets use `ws.accept()` rather than hibernation so the room's timers (bot turns, the turn timer, the 60 s seat hold) keep running. The room is also saved to the object's storage, so a deploy or an eviction does not lose a game.
+- **One referee everywhere:** the Durable Object, the Node server and the offline bot game all run `public/js/room.js`, which uses the same `rules.js` as before, so the scoring is unchanged.
+- **Full snapshots, not diffs:** every change sends each seat a complete, small snapshot with a revision number. A client that missed something is never out of sync for more than one message.
 - **Multi-deck matches with cumulative scores:** full 40-card decks are played one after another, reshuffled each time, until a team reaches the target score.
 
 ## Tests
 
-The capture rules, the bot's move choice and the round scoring live in `js/rules.js`, a pure module with no DOM or Firebase. The browser loads it as `window.ChkobaRules`; Node can `require` it. Run the unit tests (Node 18 or newer, no install needed):
-
 ```bash
-node --test
+npm test
 ```
 
-## Debug mode
+runs the unit tests with `node --test`: the rules and scoring (`rules.test.js`), the referee (`room.test.js`: no hand or deck order in any message to another seat, illegal moves refused, duplicate and stale moves ignored, reconnecting with the seat token, 4-player team scoring, two rooms side by side, the host leaving, the 60 s hold, timers) and the local server (`server.test.js`: bad and unknown room codes, a full room, origins and CORS, reconnecting over a real socket).
 
-The host can open the debug panel by running `debug()` in the browser console (press `Esc` to close it). Add `?debug=1` to the URL, or set `localStorage.chkoba_debug = "true"`, to turn on verbose logging. The panel is draggable and lets you:
+End-to-end checks drive real browser pages with Playwright for Python (`pip install playwright && playwright install chromium`), one browser with a context per player:
 
-- See every player's hand, the table and the deck
-- Move cards between hands and the table, or swap hands
-- Set, skip or pause turns
-- Set scores and chkobba counts
-- Force a deal, force scoring, or force a win for either team
-- Toggle force capture, add or remove bots, and reset the game
+```bash
+npm start                                                 # then:
+python tests/e2e/e2e.py local http://127.0.0.1:3110       # 2-player round by invite link, 4-player teams, reload, offline bot
+python tests/e2e/e2e.py away  http://127.0.0.1:3110       # a drop, the 60 s hold, a bot takes the seat
+npx wrangler dev --port 8794                              # then:
+python tests/e2e/e2e.py online http://127.0.0.1:8794
+```
+
+## Debug logging
+
+Add `?debug=1` to the URL, or set `localStorage.chkoba_debug = "true"`, to turn on verbose logging in the browser console.
 
 ## Tech stack
 
@@ -180,8 +191,8 @@ The host can open the debug panel by running `debug()` in the browser console (p
 |-------|-----------|
 | UI | Vanilla HTML + CSS (custom design tokens, three themes), WebGL background shader |
 | Logic | Vanilla JavaScript (no framework, no build step) |
-| Realtime sync | [Firebase Realtime Database](https://firebase.google.com/products/realtime-database) (compat SDK) |
-| Hosting | Any static host; Netlify config included |
+| Game server | Cloudflare Workers + Durable Objects (free plan), or Node with express + ws |
+| Transport | Plain WebSockets with acks, heartbeat and reconnect |
 
 ## License
 
