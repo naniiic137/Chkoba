@@ -82,6 +82,7 @@ const app = {
   _matchKey: '',
   _ceremonySkip: false,
   _ceremonyContinue: null,
+  _ceremonyDone: false,      // the tally has finished counting (its continue line is up)
   rulesPage: 0,
   // room defaults chosen on the Options screen (persisted)
   opts: { players: 2, winScore: 21, timer: 30, bot: 'medium', speed: 'normal', forceCapture: true, captureAssist: false },
@@ -488,7 +489,7 @@ const app = {
     this.selectedCardIndex = -1; this.selectedCaptureIndices = []; this.availableCaptures = [];
     this.isSubmittingMove = false; this._afterHello = null;
     this.moveLog = []; this._awayUntil = {}; this._awayDismissed = {};
-    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null;
+    this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null; this._ceremonyDone = false;
     this.stopTurnTimer();
     this.closeAllOverlays();
     this.renderAway();
@@ -570,6 +571,8 @@ const app = {
     }
     if (this.menuOpen) this.renderMenuContent();
     document.getElementById('match-again').hidden = !this.isHost;   // the host may have changed
+    // the host may have changed while the tally is up: its continue line follows
+    if (this._ceremonyDone && this.gameState && this.gameState.phase === 'round_end' && document.getElementById('ov-ceremony').classList.contains('open')) this.setContinue();
     this.renderAway();
   },
 
@@ -1462,7 +1465,7 @@ const app = {
     const points = [0, 0];
     lines.forEach((l) => { if (l.each) { points[0] += l.values[0]; points[1] += l.values[1]; } else if (l.winner >= 0) points[l.winner]++; });
     const before = [gs.scores[0] - points[0], gs.scores[1] - points[1]];
-    this._ceremonySkip = false; this._ceremonyContinue = null;
+    this._ceremonySkip = false; this._ceremonyContinue = null; this._ceremonyDone = false;
     const teamName = (i) => gs.numPlayers === 4 ? `${I18N.text('team')} ${i + 1}` : (gs.players[i] ? gs.players[i].name : `${I18N.text('team')} ${i + 1}`);
 
     $('cer-round').textContent = I18N.text('roundEnd');
@@ -1493,7 +1496,12 @@ const app = {
       else if (l.winner >= 0) boxes[l.winner].classList.add('win');
     };
     const cancel = () => this._ceremonySkip;
-    const stillOpen = () => this._ceremonyKey && $('ov-ceremony').classList.contains('open') && this.gameState === gs;
+    // the same tally is still on screen. Compared by key, not by object: every snapshot
+    // is a new object, and one arriving mid-count (a player dropping, the host changing)
+    // must not stop the count and leave the tally without its "tap to continue".
+    const key = this._ceremonyKey;
+    const stillOpen = () => this._ceremonyKey === key && $('ov-ceremony').classList.contains('open')
+      && !!this.gameState && this.gameState.phase === 'round_end' && this.gameState.gameToken === gs.gameToken;
 
     if (J.getJuice() <= 0) {
       lines.forEach((l, i) => finishLine(rows[i], l));
@@ -1528,20 +1536,33 @@ const app = {
     this.setContinue();
   },
 
-  // Every player taps to go on. The room deals once all of them have (a bot needs no
-  // tap), or by itself after 30 s, so one player who looked away cannot stall it.
+  // As in the first version, the host decides when the next deal goes out: the host
+  // gets "tap to continue", everyone else "waiting for the host" (a tap there only
+  // skips their own count). If the host drops, control passes on and the new host's
+  // tally switches to "tap to continue". Online, the room also moves on by itself
+  // after 30 s as a safety net; a bot game waits for the tap.
   setContinue() {
+    this._ceremonyDone = true;
     const skip = document.getElementById('cer-skip');
-    const tapped = !!this.snap && this.snap.ready.includes(this.myPlayerId);
-    skip.textContent = tapped ? 'waiting for the other players' : 'tap to continue';
-    skip.classList.toggle('waiting', tapped);
-    this._ceremonyContinue = tapped ? null : () => this.continueRound();
+    if (this.isHost) {
+      skip.textContent = 'tap to continue'; skip.classList.remove('waiting');
+      this._ceremonyContinue = () => this.continueRound();
+    } else {
+      skip.textContent = 'waiting for the host'; skip.classList.add('waiting');
+      this._ceremonyContinue = null;
+    }
   },
 
+  // The host's tap closes the tally at once, as before; if the room refuses or does not
+  // answer, the tally comes back so the tap can be made again.
   continueRound() {
-    const skip = document.getElementById('cer-skip');
-    skip.textContent = 'waiting for the other players'; skip.classList.add('waiting');
-    this.ask('continue').then((ack) => { if (!ack || !ack.ok) this.setContinue(); });
+    this._ceremonyContinue = null;
+    this.closeOverlay('ov-ceremony');
+    this.ask('continue').then((ack) => {
+      if (ack && ack.ok) return;
+      const gs = this.gameState;
+      if (gs && gs.phase === 'round_end') { this.openOverlay('ov-ceremony'); this.setContinue(); }
+    });
   },
 
   // ========== MATCH END ==========

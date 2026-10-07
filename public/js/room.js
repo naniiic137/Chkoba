@@ -38,7 +38,7 @@
   const CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/;
 
   const HOLD_MS = 60000;            // a dropped player's seat is kept this long before others may act
-  const ROUND_END_AUTO_MS = 30000;  // the tally moves on by itself if someone never taps continue
+  const ROUND_END_AUTO_MS = 30000;  // safety net: the tally moves on by itself if the host never taps continue
   const MAX_MESSAGE = 4096;         // bytes; every real message is far smaller
   const RATE_WINDOW_MS = 5000, RATE_MAX = 40;
   const EMOTE_GAP_MS = 800;
@@ -130,7 +130,7 @@
 
   class Room {
     // opts: room options (see normalizeOpts) plus code.
-    // env:  { clock, holdMs, autoContinueMs (0: the tally waits for every tap), onChange(room),
+    // env:  { clock, holdMs, autoContinueMs (0: the tally waits for the host's tap), onChange(room),
     //         onClose(room), log(level, ...args) }
     constructor(opts, env) {
       env = env || {};
@@ -146,7 +146,6 @@
       this.owner = -1;          // the seat with lobby control: the creator, then the next player
       this.gs = null;           // the authoritative game (null in the lobby)
       this.moveLog = [];
-      this.ready = {};          // seats that tapped continue on the round-end tally
       this.rev = 0;             // snapshot counter: clients drop anything older than what they have
       this.turnStartedAt = 0;
       this.conns = new Set();
@@ -348,7 +347,6 @@
     _startGame() {
       const n = this.opts.players;
       const prev = this.gs ? this.gs.gameToken : 0;
-      this.ready = {};
       this.moveLog = [];
       this.gs = {
         phase: 'playing', numPlayers: n,
@@ -536,7 +534,6 @@
       gs.lastScore = { mostCardsPt: r.mostCardsPt, mostDiamondsPt: r.mostDiamondsPt, sevenDiamondsPt: r.sevenDiamondsPt, mostSevensPt: r.mostSevensPt, counts: r.counts };
       gs.phase = 'round_end';
       gs.currentTurn = -1;
-      this.ready = {};
       this._log(`Deal scored: ${gs.scores[0]} - ${gs.scores[1]}`);
       this._arm(0);
       this._commit();
@@ -545,7 +542,6 @@
     _nextRound() {
       const gs = this.gs;
       if (!gs || gs.phase !== 'round_end') return;
-      this.ready = {};
       const winner = R.matchWinner(gs.scores, gs.winScore);
       if (winner >= 0) {
         gs.phase = 'finished'; gs.winner = winner; gs.endReason = 'score';
@@ -617,7 +613,6 @@
         game: gs ? this._publicState() : null,
         hand: gs && gs.hands[i] ? gs.hands[i].map(slim) : [],
         log: this.moveLog.slice(-50),
-        ready: Object.keys(this.ready).map(Number),
       };
     }
 
@@ -628,7 +623,7 @@
       return {
         v: 1, code: this.code, opts: this.opts, owner: this.owner, rev: this.rev,
         seats: this.seats.map((s) => (s ? { name: s.name, token: s.token || '', human: !!s.human, bot: s.bot || null, takeover: s.takeover || null, left: !!s.left, holdExpired: !!s.holdExpired } : null)),
-        gs: this.gs, moveLog: this.moveLog, ready: this.ready, savedAt: this.now(),
+        gs: this.gs, moveLog: this.moveLog, savedAt: this.now(),
       };
     }
 
@@ -639,7 +634,6 @@
       room.rev = data.rev || 0;
       room.gs = data.gs || null;
       room.moveLog = data.moveLog || [];
-      room.ready = data.ready || {};
       room.seats = (data.seats || []).map((s) => (s ? { ...s, conn: null, connected: !s.human, awaySince: now } : null));
       // every human is away until their socket comes back: the hold starts again
       room.seats.forEach((s, i) => { if (s && s.human && !s.holdExpired) room._setTimer('hold' + i, room.holdMs, () => room._holdExpired(i)); });
@@ -726,14 +720,13 @@
       if (!Number.isInteger(cardId) || ids.length > 10 || !ids.every(Number.isInteger)) return { error: 'illegal', reason: 'bad-input', mustTake: [] };
       return this._play(seat, cardId, ids);
     },
-    // the round-end tally: the next deal goes out once every connected player tapped
+    // the round-end tally: the host (the seat with control) decides when the next deal
+    // goes out, as in the first version; the others wait for the host
     continue(seat) {
       const gs = this.gs;
       if (!gs || gs.phase !== 'round_end') return {};
-      this.ready[seat] = true;
-      const waiting = this.seats.some((s, i) => s && s.human && s.connected && !this.ready[i]);
-      if (!waiting) this._nextRound();
-      else this._commit();
+      if (!isOwner(this, seat)) return { error: 'not-owner' };
+      this._nextRound();
       return {};
     },
     rematch(seat) {

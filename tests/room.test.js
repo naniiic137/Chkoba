@@ -197,8 +197,10 @@ function playFourPlayerDeck() {
   assert.deepEqual(g.scores, expected.points);
   assert.deepEqual(g.lastScore.counts, expected.counts);
   assert.deepEqual(g.capturedCounts, [piles[0].length, piles[1].length]);
-  // everyone taps continue and the next deck goes out
-  clients.forEach((c) => c.send('continue'));
+  // a guest's tap does not move the tally on; the host's does, and the next deck goes out
+  assert.equal(clients[1].send('continue').error, 'not-owner');
+  assert.equal(watch.state.game.phase, 'round_end');
+  assert.equal(clients[0].send('continue').ok, true);
   assert.equal(watch.state.game.phase, 'playing');
   assert.equal(watch.state.game.roundNum, 0);
   assert.equal(watch.state.game.deckCount, 40 - 4 - 12);
@@ -296,13 +298,28 @@ test('the turn timer plays for a player who runs out of time', () => {
   assert.ok(clients[0].inbox.some((m) => m.t === 'notice' && /ran out of time/.test(m.text)));
 });
 
-test('the tally moves on by itself when someone never taps continue', () => {
-  const { room, clock, clients } = startedRoom(2, { winScore: 31 });
+test('the host moves the tally on; a guest waits; 30 s is the safety net', () => {
+  // the host's single tap deals the next round, whatever the guest does
+  let { room, clock, clients } = startedRoom(2, { winScore: 31 });
   playUntil(clients, clock, () => room.gs.phase === 'round_end');
-  clients[0].send('continue');
+  assert.equal(clients[1].send('continue').error, 'not-owner');
+  clock.tick(5000);
   assert.equal(room.gs.phase, 'round_end');
-  assert.deepEqual(clients[1].state.ready, [0]);
-  clock.tick(31000);
+  assert.equal(clients[0].send('continue').ok, true);
+  assert.equal(room.gs.phase, 'playing');
+  // nobody taps: the room moves on by itself after 30 s
+  ({ room, clock, clients } = startedRoom(2, { winScore: 31 }));
+  playUntil(clients, clock, () => room.gs.phase === 'round_end');
+  clock.tick(29000);
+  assert.equal(room.gs.phase, 'round_end');
+  clock.tick(2000);
+  assert.equal(room.gs.phase, 'playing');
+  // the host drops on the tally: control passes to the guest, whose tap continues
+  ({ room, clock, clients } = startedRoom(2, { winScore: 31 }));
+  playUntil(clients, clock, () => room.gs.phase === 'round_end');
+  clients[0].drop();
+  assert.equal(clients[1].state.owner, 1);
+  assert.equal(clients[1].send('continue').ok, true);
   assert.equal(room.gs.phase, 'playing');
   // alone with a bot (autoContinueMs 0) the tally waits for the player's tap
   const solo = makeRoom({ players: 2, speed: 'fast' }, { autoContinueMs: 0 });

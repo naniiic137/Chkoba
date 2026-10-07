@@ -122,12 +122,20 @@ def play_until(pages, done, limit=400, what='the goal'):
 
 
 def continue_tally(pages):
-    """Every player taps through the round-end tally; the next deal must go out."""
+    """The round-end tally shows on every screen; the guests wait for the host, whose
+    single tap deals the next round (pages[0] is the host)."""
     for p in pages:
         p.wait_for_selector('#ov-ceremony.open', timeout=15000)
-    for p in pages:
-        p.wait_for_function("() => !!app._ceremonyContinue", timeout=15000)
-        p.click('#ov-ceremony')
+        assert p.locator('#cer-lines .cer-line').count() == 5, 'the tally has its five lines'
+    host, guests = pages[0], pages[1:]
+    for p in guests:
+        p.wait_for_function("() => app._ceremonyDone", timeout=20000)
+        assert p.text_content('#cer-skip').strip() == 'waiting for the host', p.text_content('#cer-skip')
+        p.click('#ov-ceremony')   # a guest's tap changes nothing
+    host.wait_for_function("() => !!app._ceremonyContinue", timeout=20000)
+    assert host.text_content('#cer-skip').strip() == 'tap to continue'
+    assert host.evaluate("() => app.gameState.phase") == 'round_end', 'a guest tap moved the tally on'
+    host.click('#ov-ceremony')
     for p in pages:
         p.wait_for_function("() => app.gameState && app.gameState.phase === 'playing' && app.gameState.roundNum === 0 && app.gameState.deckCount === 40 - 4 - 3 * app.gameState.numPlayers", timeout=15000)
 
@@ -209,7 +217,9 @@ def offline_bot(browser, base):
     page.click('#m-resume')
     wait_screen(page, 'game')
     play_until([page], lambda: phase(page) in ('round_end', 'finished'), what='the tally vs the bot')
-    print('  (d) offline bot game played to the tally, resumed after a reload, no socket opened')
+    if phase(page) == 'round_end':
+        continue_tally([page])   # alone with the bot: one tap continues
+    print('  (d) offline bot game played to the tally and on, resumed after a reload, no socket opened')
     ctx.close()
 
 
