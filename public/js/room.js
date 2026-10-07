@@ -42,6 +42,7 @@
   const MAX_MESSAGE = 4096;         // bytes; every real message is far smaller
   const RATE_WINDOW_MS = 5000, RATE_MAX = 40;
   const EMOTE_GAP_MS = 800;
+  const DEBUG_TRIES = 5, DEBUG_TRY_WINDOW_MS = 60000;   // wrong debug keys per room per minute
 
   const BOT_NAMES = { easy: 'Bot (easy)', medium: 'Bot', hard: 'Bot (hard)' };
   const EMOTES = { gg: 'GG! \u{1F44F}', nice: 'Nice! \u{1F525}', wow: 'Wow! \u{1F632}', oops: 'Oops! \u{1F605}', hurry: 'Hurry up! ⏰' };
@@ -75,6 +76,41 @@
     const b = new Uint8Array(16);
     crypto.getRandomValues(b);
     return Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  // SHA-256 of a string (UTF-8), as hex. Synchronous and dependency-free so the same
+  // check runs in the Worker, in Node and in the tests. Only used for the debug key.
+  function sha256Hex(str) {
+    const bytes = Array.from(new TextEncoder().encode(String(str)));
+    const K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+      0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+      0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+    const H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    const bitLen = bytes.length * 8;
+    bytes.push(0x80);
+    while (bytes.length % 64 !== 56) bytes.push(0);
+    for (let i = 7; i >= 0; i--) bytes.push(i >= 4 ? 0 : (bitLen >>> (i * 8)) & 0xff);
+    const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+    const w = new Array(64);
+    for (let off = 0; off < bytes.length; off += 64) {
+      for (let i = 0; i < 16; i++) w[i] = (bytes[off + 4 * i] << 24) | (bytes[off + 4 * i + 1] << 16) | (bytes[off + 4 * i + 2] << 8) | bytes[off + 4 * i + 3];
+      for (let i = 16; i < 64; i++) {
+        const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+        const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      let [a, b, c, d, e, f, g, h] = H;
+      for (let i = 0; i < 64; i++) {
+        const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i]) | 0;
+        const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      [a, b, c, d, e, f, g, h].forEach((v, i) => { H[i] = (H[i] + v) | 0; });
+    }
+    return H.map((v) => (v >>> 0).toString(16).padStart(8, '0')).join('');
   }
 
   function createDeck() {
@@ -131,7 +167,9 @@
   class Room {
     // opts: room options (see normalizeOpts) plus code.
     // env:  { clock, holdMs, autoContinueMs (0: the tally waits for the host's tap), onChange(room),
-    //         onClose(room), log(level, ...args) }
+    //         onClose(room), log(level, ...args),
+    //         debugKeyHash (sha-256 hex of the owner's debug key), debugOpen (the offline
+    //         game: the debug panel needs no key) }
     constructor(opts, env) {
       env = env || {};
       this.code = (opts && opts.code) || '';
@@ -141,6 +179,19 @@
       this.onChange = env.onChange || null;
       this.onClose = env.onClose || null;
       this.log = env.log || (() => {});
+      // the owner's debug panel. A debug connection gets a full snapshot (every hand,
+      // the deck); every other connection still gets only its own hand. Never saved.
+      this.debugKeyHash = typeof env.debugKeyHash === 'string' ? env.debugKeyHash.toLowerCase() : '';
+      this.debugOpen = !!env.debugOpen;
+      this.debugOn = this.debugOpen;   // undo history is kept once someone debugs
+      this.debugHistory = [];          // the game before each move, for undo
+      this.debugSaved = null;
+      this.debugFails = [];
+      this.debugRev = 0;               // bumped by every panel change: clients jump instead of animating
+      this.debugCard = 1000;           // ids for cards the panel adds
+      this.frozen = false;             // the panel's freeze: no bot, no timer, no move
+      this.debugCtl = null;            // a seat played from the panel ("play as"): no bot plays it
+      this.debugCtlConn = null;
       this.opts = normalizeOpts(opts);
       this.seats = new Array(this.opts.players).fill(null);
       this.owner = -1;          // the seat with lobby control: the creator, then the next player
@@ -169,6 +220,7 @@
       this.lastActive = this.now();
       const i = conn.seat;
       conn.seat = -1;
+      this._debugGone(conn);
       const s = i >= 0 ? this.seats[i] : null;
       if (!s || s.conn !== conn) return;
       s.conn = null;
@@ -230,7 +282,7 @@
     _send(conn, obj) {
       try { conn.send(JSON.stringify(obj)); } catch (e) { /* a dead socket: its close event cleans up */ }
     }
-    _sendState(conn) { if (conn.seat >= 0) this._send(conn, { t: 'state', s: this.snapshotFor(conn.seat) }); }
+    _sendState(conn) { if (conn.seat >= 0) this._send(conn, { t: 'state', s: this.snapshotFor(conn.seat, conn.debug ? conn : null) }); }
     _notice(text, except) {
       for (const c of this.conns) if (c.seat >= 0 && c.seat !== except) this._send(c, { t: 'notice', text });
     }
@@ -391,7 +443,7 @@
     _arm(delay) {
       this._clearTimer('turn');
       const gs = this.gs;
-      if (!gs || this.closed || !this._humansHere()) return;
+      if (!gs || this.closed || !this._humansHere() || this.frozen) return;
       delay = delay || 0;
       const token = gs.gameToken, seq = gs.moveSeq;
       const same = () => this.gs === gs && gs.gameToken === token && gs.moveSeq === seq;
@@ -406,7 +458,7 @@
       }
       const pid = gs.currentTurn;
       this.turnStartedAt = this.now() + delay;
-      if (this._isBotSeat(pid)) {
+      if (this._isBotSeat(pid) && this.debugCtl !== pid) {
         const [base, spread] = BOT_DELAY[this.opts.speed] || BOT_DELAY.normal;
         this._setTimer('turn', delay + base + Math.random() * spread, () => { if (same() && gs.currentTurn === pid) this._botPlay(pid); });
       } else if (gs.turnTimerDuration > 0) {
@@ -447,6 +499,7 @@
       if (!verdict.ok) return { error: 'illegal', reason: verdict.reason, mustTake: verdict.mustTake || [] };
 
       this._clearTimer('turn');
+      if (this.debugOn) { this.debugHistory.push(JSON.stringify(gs)); if (this.debugHistory.length > 50) this.debugHistory.shift(); }
       gs.shkobbaThisTurn = false;
       const playedCard = hand.splice(cardIndex, 1)[0];
       const teamIndex = gs.players[playerId].team;
@@ -595,11 +648,13 @@
         diamondOwnership: ownership,
         lastMove: gs.lastMove || null, moveSeq: gs.moveSeq,
         look: this.opts.look,
+        frozen: this.frozen, debugRev: this.debugRev,
       };
     }
 
-    // What one seat may see: the public state and its own hand, nothing else.
-    snapshotFor(i) {
+    // What one seat may see: the public state and its own hand, nothing else. A debug
+    // connection (the owner, with the key) also gets every hand and the deck.
+    snapshotFor(i, debugConn) {
       const now = this.now();
       const gs = this.gs;
       return {
@@ -613,8 +668,55 @@
         game: gs ? this._publicState() : null,
         hand: gs && gs.hands[i] ? gs.hands[i].map(slim) : [],
         log: this.moveLog.slice(-50),
+        debug: debugConn ? this._debugView(debugConn) : undefined,
       };
     }
+
+    _debugView(conn) {
+      const gs = this.gs;
+      return {
+        hands: gs ? gs.hands.map((h) => h.map(slim)) : [],
+        deck: gs ? gs.deck.map(slim) : [],
+        captured: gs ? gs.capturedTeams.map((t) => t.length) : [0, 0],
+        history: this.debugHistory.length, saved: !!this.debugSaved, frozen: this.frozen,
+        ctl: this.debugCtlConn === conn ? this.debugCtl : null,
+        bots: this.seats.map((s) => (s ? s.bot || s.takeover || null : null)),
+      };
+    }
+
+    // ================= DEBUG =================
+    _debugUnlock(conn, key) {
+      if (conn.debug) return {};
+      if (!this.debugOpen) {
+        if (!this.debugKeyHash) return { error: 'debug-off' };
+        const now = this.now();
+        this.debugFails = this.debugFails.filter((t) => now - t < DEBUG_TRY_WINDOW_MS);
+        if (this.debugFails.length >= DEBUG_TRIES) return { error: 'slow-down' };
+        if (typeof key !== 'string' || key.length > 200 || sha256Hex(key) !== this.debugKeyHash) {
+          this.debugFails.push(now);
+          return { error: 'bad-key' };
+        }
+      }
+      conn.debug = true;
+      this.debugOn = true;
+      this.log('info', 'debug unlocked by seat', conn.seat);
+      this._sendState(conn);
+      return {};
+    }
+
+    // The last debug connection is gone: the game must not stay frozen or held.
+    _debugGone(conn) {
+      if (!conn.debug) return;
+      conn.debug = false;
+      if (this.debugCtlConn === conn) { this.debugCtl = null; this.debugCtlConn = null; }
+      if (![...this.conns].some((c) => c.debug) && this.frozen) { this.frozen = false; this._arm(0); }
+    }
+
+    _newDebugCard(index) {
+      const def = createDeck()[index];
+      return def ? { ...def, id: this.debugCard++ } : null;
+    }
+
 
     // ================= PERSISTENCE =================
     // The whole room, hands and deck included. Only for the room's own storage (the
@@ -640,6 +742,178 @@
       return room;
     }
   }
+
+  // ================= THE DEBUG PANEL (seat, msg, conn) =================
+  // What the first version's host panel did, done by the referee. Only for a debug
+  // connection: the offline game's own page, or the owner with the debug key.
+  const seatOk = (room, v) => Number.isInteger(v) && v >= 0 && v < room.gs.numPlayers;
+  const num = (v, min, max) => { const n = parseInt(v, 10); return isNaN(n) ? min : Math.max(min, Math.min(max, n)); };
+  const DEBUG_OPS = {
+    addCard(m) {
+      if (!seatOk(this, m.seat)) return { error: 'bad-slot' };
+      const c = this._newDebugCard(m.index); if (!c) return { error: 'bad-card' };
+      this.gs.hands[m.seat].push(c);
+      return { text: `Added ${c.display} of ${c.suit} to P${m.seat}` };
+    },
+    removeCard(m) {
+      if (!seatOk(this, m.seat)) return { error: 'bad-slot' };
+      const hand = this.gs.hands[m.seat];
+      if (!Number.isInteger(m.index) || m.index < 0 || m.index >= hand.length) return { error: 'bad-card' };
+      const c = hand.splice(m.index, 1)[0];
+      return { text: `Removed ${c.display} of ${c.suit} from P${m.seat}` };
+    },
+    addTable(m) {
+      const c = this._newDebugCard(m.index); if (!c) return { error: 'bad-card' };
+      this.gs.tableCards.push(c);
+      return { text: `Added ${c.display} of ${c.suit} to table` };
+    },
+    removeTable(m) {
+      const t = this.gs.tableCards;
+      if (!Number.isInteger(m.index) || m.index < 0 || m.index >= t.length) return { error: 'bad-card' };
+      const c = t.splice(m.index, 1)[0];
+      return { text: `Removed ${c.display} of ${c.suit} from table` };
+    },
+    shuffleDeck() { shuffle(this.gs.deck); return { text: 'Deck shuffled!' }; },
+    refillDeck() { this.gs.deck = shuffle(createDeck()); return { text: 'Deck refilled with 40 cards!' }; },
+    setTurn(m) {
+      if (!seatOk(this, m.seat)) return { error: 'bad-slot' };
+      this.gs.currentTurn = m.seat; this.gs.shkobbaThisTurn = false;
+      this._arm(0);
+      return { text: 'Turn set to P' + m.seat };
+    },
+    skipTurn() {
+      if (this.gs.phase !== 'playing') return { error: 'phase', text: 'No active game' };
+      this._nextTurn(0);
+      return {};
+    },
+    pauseTimer() { this._clearTimer('turn'); return { text: 'Timer paused' }; },
+    setScores(m) {
+      this.gs.scores = [num(m.s1, 0, 999), num(m.s2, 0, 999)];
+      return { text: `Scores set: Team 1 = ${this.gs.scores[0]}, Team 2 = ${this.gs.scores[1]}` };
+    },
+    setShkobba(m) {
+      this.gs.shkobbaCount = [num(m.s1, 0, 99), num(m.s2, 0, 99)];
+      return { text: `Shkobba set: T1=${this.gs.shkobbaCount[0]}, T2=${this.gs.shkobbaCount[1]}` };
+    },
+    tableToHand() {
+      const gs = this.gs;
+      if (!gs.tableCards.length) return { error: 'empty', text: 'Table is empty' };
+      const c = gs.tableCards.pop(); const pid = gs.currentTurn >= 0 ? gs.currentTurn : 0;
+      gs.hands[pid].push(c);
+      return { text: `Moved ${c.display} from table to P${pid}'s hand` };
+    },
+    handToTable() {
+      const gs = this.gs; const pid = gs.currentTurn >= 0 ? gs.currentTurn : 0;
+      if (!gs.hands[pid].length) return { error: 'empty', text: 'Hand is empty' };
+      const c = gs.hands[pid].pop();
+      gs.tableCards.push(c);
+      return { text: `Moved ${c.display} from P${pid}'s hand to table` };
+    },
+    swapHands() {
+      const h = this.gs.hands; [h[0], h[1]] = [h[1], h[0]];
+      return { text: 'Hands swapped between P0 and P1' };
+    },
+    clearTable() { const n = this.gs.tableCards.length; this.gs.tableCards = []; return { text: `Cleared ${n} cards from table` }; },
+    returnCaptures(m) {
+      const t = m.team === 1 ? 1 : 0; const cards = this.gs.capturedTeams[t];
+      if (!cards.length) return { error: 'empty', text: 'No captures to return' };
+      this.gs.deck.push(...cards); shuffle(this.gs.deck); this.gs.capturedTeams[t] = [];
+      return { text: `Returned ${cards.length} cards from T${t + 1} captures to deck` };
+    },
+    dealRound() {
+      const gs = this.gs;
+      gs.deck = shuffle(createDeck()); gs.tableCards = []; gs.roundNum = 0; gs.phase = 'playing';
+      gs.winner = -1; gs.endReason = null; delete gs.nextDealerTurn;
+      this._dealRound();
+      return {};
+    },
+    forceScore() {
+      const gs = this.gs;
+      if (gs.tableCards.length > 0 && gs.lastCaptureTeam >= 0) { gs.capturedTeams[gs.lastCaptureTeam].push(...gs.tableCards); gs.tableCards = []; }
+      this._clearTimer('turn');
+      this._scoreRound();
+      return { text: 'Forced scoring!' };
+    },
+    win(m) {
+      const gs = this.gs; const t = m.team === 1 ? 1 : 0;
+      gs.scores[t] = gs.winScore; gs.winner = t; gs.phase = 'finished'; gs.endReason = 'score'; gs.currentTurn = -1; gs.lastScore = null;
+      this._clearTimer('turn');
+      return {};
+    },
+    toggleForce() {
+      const v = !this.gs.forceCapture; this.gs.forceCapture = v; this.opts.forceCapture = v;
+      return { text: 'Force capture ' + (v ? 'ON' : 'OFF') };
+    },
+    setWinScore(m) {
+      const v = parseInt(m.value, 10); if (isNaN(v) || v < 1 || v > 999) return { error: 'bad-value', text: 'Invalid score' };
+      this.gs.winScore = v; this.opts.winScore = v;
+      return { text: `Win score set to ${v}` };
+    },
+    addBot(m, seat) {
+      if (!seatOk(this, m.seat) || m.seat === seat) return { error: 'bad-slot', text: "Can't replace the host" };
+      const s = this.seats[m.seat]; const level = BOT_NAMES[m.level] ? m.level : 'medium';
+      if (s.bot || s.takeover) return { error: 'taken', text: 'Already a bot' };
+      if (s.human) s.takeover = level; else s.bot = level;
+      if (!s.human) { s.name = BOT_NAMES[level]; this.gs.players[m.seat].name = s.name; }
+      if (this.gs.currentTurn === m.seat) this._arm(0);
+      return { text: 'P' + m.seat + ' replaced with bot' };
+    },
+    removeBot(m) {
+      if (!seatOk(this, m.seat)) return { error: 'bad-slot' };
+      const s = this.seats[m.seat];
+      if (!s.bot && !s.takeover) return { error: 'not-bot', text: 'Not a bot' };
+      if (s.takeover) s.takeover = null; else s.bot = null;
+      this._arm(0);
+      return { text: 'P' + m.seat + ' is no longer a bot (timer will auto-play)' };
+    },
+    swapTeam(m) {
+      if (!seatOk(this, m.seat)) return { error: 'bad-slot' };
+      const p = this.gs.players[m.seat]; const old = p.team; p.team = old === 0 ? 1 : 0;
+      return { text: `${p.name} moved from T${old + 1} to T${p.team + 1}` };
+    },
+    reset() {
+      this.debugHistory = []; this.debugCtl = null; this.debugCtlConn = null; this.frozen = false;
+      this._startGame();
+      return { text: 'Game fully reset!' };
+    },
+    undo() {
+      if (!this.debugHistory.length) return { error: 'empty', text: 'Nothing to undo' };
+      this.gs = JSON.parse(this.debugHistory.pop());
+      this._arm(0);
+      return { text: 'Undid last move' };
+    },
+    rerun() {
+      const gs = this.gs;
+      gs.capturedTeams = [[], []]; gs.shkobbaCount = [0, 0]; gs.lastCaptureTeam = -1; gs.lastMove = null; gs.lastScore = null;
+      gs.tableCards = []; gs.roundNum = 0; gs.deck = shuffle(createDeck()); gs.phase = 'playing'; gs.winner = -1; gs.endReason = null;
+      delete gs.nextDealerTurn;
+      this._dealRound();
+      return { text: 'Round restarted!' };
+    },
+    save() { this.debugSaved = JSON.stringify(this.gs); return { text: 'Snapshot saved!' }; },
+    load() {
+      if (!this.debugSaved) return { error: 'empty', text: 'No snapshot saved' };
+      this.gs = JSON.parse(this.debugSaved);
+      this._arm(0);
+      return { text: 'Snapshot loaded!' };
+    },
+    possess(m, seat, conn) {
+      if (!seatOk(this, m.seat) || m.seat === seat) return { error: 'bad-slot', text: 'Already your hand' };
+      this.debugCtl = m.seat; this.debugCtlConn = conn;
+      this._arm(0);
+      return { text: `Now controlling P${m.seat} ${this.gs.players[m.seat].name}` };
+    },
+    release() {
+      this.debugCtl = null; this.debugCtlConn = null;
+      this._arm(0);
+      return { text: 'Released control' };
+    },
+    freeze() {
+      this.frozen = !this.frozen;
+      if (this.frozen) this._clearTimer('turn'); else this._arm(0);
+      return { text: this.frozen ? 'Game FROZEN — all players paused' : 'Game UNFROZEN — resuming' };
+    },
+  };
 
   // ================= MESSAGES (seat, msg) =================
   const isOwner = (room, seat) => room.owner === seat;
@@ -710,9 +984,10 @@
     },
 
     // ---- game ----
-    move(seat, msg) {
+    move(seat, msg, conn) {
       const gs = this.gs;
       if (!gs) return { error: 'phase' };
+      if (this.frozen && !conn.debug) return { error: 'frozen' };
       // a duplicate, or a move made against an older table, is ignored
       if (msg.game !== gs.gameToken || msg.seq !== gs.moveSeq) return { error: 'stale' };
       const cardId = msg.cardId;
@@ -792,6 +1067,30 @@
       this._commit();
       return {};
     },
+    // The debug panel. 'unlock' (with the key) makes this connection a debug
+    // connection; every other op needs one. 'move' plays for the seat taken with
+    // "play as" (or any seat), through the same rule check as every move.
+    debug(seat, msg, conn) {
+      if (msg.op === 'unlock') return this._debugUnlock(conn, msg.key);
+      if (!conn.debug) return { error: 'not-debug' };
+      const gs = this.gs;
+      if (!gs) return { error: 'phase', text: 'No game' };
+      if (msg.op === 'move') {
+        if (!seatOk(this, msg.seat)) return { error: 'bad-slot' };
+        if (msg.game !== gs.gameToken || msg.seq !== gs.moveSeq) return { error: 'stale' };
+        const ids = Array.isArray(msg.captureCardIds) ? msg.captureCardIds : [];
+        if (!Number.isInteger(msg.cardId) || ids.length > 10 || !ids.every(Number.isInteger)) return { error: 'illegal', reason: 'bad-input', mustTake: [] };
+        return this._play(msg.seat, msg.cardId, ids);
+      }
+      const op = Object.prototype.hasOwnProperty.call(DEBUG_OPS, msg.op) ? DEBUG_OPS[msg.op] : null;
+      if (!op) return { error: 'unknown' };
+      this.debugRev++;
+      const res = op.call(this, msg, seat, conn) || {};
+      if (res.error) return res;
+      // nothing goes to the move log: it is public, and a debug change can name hidden cards
+      this._commit();
+      return res;
+    },
     emote(seat, msg, conn) {
       const text = EMOTES[msg.key];
       if (!text) return { error: 'bad-emote' };
@@ -805,7 +1104,7 @@
   };
 
   return {
-    Room, HANDLERS, normalizeOpts, normalizeLook, newRoomCode, isRoomCode, newToken, createDeck, cardName,
+    Room, HANDLERS, DEBUG_OPS, sha256Hex, normalizeOpts, normalizeLook, newRoomCode, isRoomCode, newToken, createDeck, cardName,
     HOLD_MS, ROUND_END_AUTO_MS, BOT_NAMES, EMOTES, moveAnimMs, dealAnimMs,
   };
 });

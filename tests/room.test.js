@@ -371,3 +371,93 @@ test('bad input is ignored without throwing', () => {
   assert.equal(c.send('emote', { key: 'gg' }).ok, true);
   assert.equal(c.send('emote', { key: 'gg' }).error, 'slow-down');
 });
+
+// ---- the debug panel (the owner's key; the offline game needs none) ----
+const { sha256Hex } = require('../public/js/room.js');
+const TEST_KEY = 'test-key-not-the-real-one';
+
+test('sha256Hex matches node crypto', () => {
+  const nodeHash = (s) => require('crypto').createHash('sha256').update(s).digest('hex');
+  for (const s of ['', 'abc', TEST_KEY, 'x'.repeat(200), 'héllo ☃']) assert.equal(sha256Hex(s), nodeHash(s));
+});
+
+test('the debug key: wrong keys are refused and rate-limited, no hash means no debug', () => {
+  const { room, clock } = makeRoom({ players: 2 }, { debugKeyHash: sha256Hex(TEST_KEY) });
+  const a = client(room), b = client(room);
+  a.hello('A'); b.hello('B'); a.send('start');
+  assert.equal(a.send('debug', { op: 'win', team: 0 }).error, 'not-debug');
+  for (let i = 0; i < 5; i++) assert.equal(a.send('debug', { op: 'unlock', key: 'nope' + i }).error, 'bad-key');
+  assert.equal(a.send('debug', { op: 'unlock', key: TEST_KEY }).error, 'slow-down');   // even the right key, for a minute
+  clock.tick(61000);
+  assert.equal(a.send('debug', { op: 'unlock', key: TEST_KEY }).ok, true);
+  assert.equal(a.state.debug.hands[1].length, room.gs.hands[1].length);
+  assert.equal(a.state.debug.deck.length, room.gs.deck.length);
+  assert.equal(b.state.debug, undefined);
+  // a room without a configured hash has no debug at all
+  const off = makeRoom({ players: 2 }).room;
+  const c = client(off); c.hello('C');
+  assert.equal(c.send('debug', { op: 'unlock', key: TEST_KEY }).error, 'debug-off');
+  // the offline game opens it without a key
+  const local = makeRoom({ players: 2 }, { debugOpen: true }).room;
+  const d = client(local); d.hello('D');
+  assert.equal(d.send('debug', { op: 'unlock' }).ok, true);
+});
+
+test('a normal seat never receives another hand or the deck while another seat debugs', () => {
+  let checked = 0;
+  const audit = (room, seat, msg, text) => {
+    if (seat !== 1 || !room.gs) return;
+    assert.ok(!/"deck"|"hands"|"capturedTeams"|"debug"/.test(text.replace(/"deckCount"/g, '').replace(/"debugRev"/g, '')), 'private key in ' + text.slice(0, 80));
+    const hidden = new Set(room.gs.deck.map((c) => c.id));
+    room.gs.hands.forEach((h, i) => { if (i !== 1) h.forEach((c) => hidden.add(c.id)); });
+    for (const c of cardsIn(msg)) assert.ok(!hidden.has(c.id), `seat 1 saw hidden card ${c.id} in a ${msg.t}`);
+    checked++;
+  };
+  const { room, clock } = makeRoom({ players: 2 }, { debugKeyHash: sha256Hex(TEST_KEY) });
+  const a = client(room), b = client(room, (m, text) => audit(room, 1, m, text));
+  a.hello('Owner'); b.hello('Guest'); a.send('start');
+  assert.equal(a.send('debug', { op: 'unlock', key: TEST_KEY }).ok, true);
+  // the owner sees the guest's hand and plays with the panel
+  assert.deepEqual(a.state.debug.hands[1].map((c) => c.id), b.state.hand.map((c) => c.id));
+  assert.equal(a.send('debug', { op: 'addCard', seat: 0, index: 16 }).ok, true);
+  assert.equal(a.send('debug', { op: 'addTable', index: 3 }).ok, true);
+  assert.equal(a.send('debug', { op: 'shuffleDeck' }).ok, true);
+  assert.equal(a.send('debug', { op: 'save' }).ok, true);
+  // play as the guest's seat: the move goes through the same rule check
+  assert.equal(a.send('debug', { op: 'possess', seat: 1 }).ok, true);
+  assert.equal(a.state.debug.ctl, 1);
+  if (room.gs.currentTurn !== 1) assert.equal(a.send('debug', { op: 'setTurn', seat: 1 }).ok, true);
+  const g = room.gs, hand = g.hands[1];
+  const mv = R.chooseBotMove(hand, g.tableCards, 'medium', g.forceCapture);
+  assert.equal(a.send('debug', { op: 'move', seat: 1, game: g.gameToken, seq: g.moveSeq, cardId: mv.cardId, captureCardIds: mv.captureCardIds }).ok, true);
+  assert.equal(a.send('debug', { op: 'undo' }).ok, true);
+  assert.equal(a.send('debug', { op: 'release' }).ok, true);
+  assert.equal(a.send('debug', { op: 'load' }).ok, true);
+  // freeze: the guest cannot move and nothing plays by itself
+  assert.equal(a.send('debug', { op: 'freeze' }).ok, true);
+  assert.equal(b.state.game.frozen, true);
+  if (room.gs.currentTurn !== 1) a.send('debug', { op: 'setTurn', seat: 1 });
+  assert.equal(b.play().error, 'frozen');
+  a.send('debug', { op: 'freeze' });
+  playUntil([a, b], clock, () => room.gs.moveSeq >= 4);
+  assert.equal(a.send('debug', { op: 'forceScore' }).ok, true);
+  assert.equal(room.gs.phase, 'round_end');
+  assert.equal(a.send('debug', { op: 'win', team: 1 }).ok, true);
+  assert.equal(b.state.game.phase, 'finished');
+  assert.equal(b.state.game.winner, 1);
+  assert.ok(checked > 10, 'audited ' + checked + ' messages to the guest');
+});
+
+test('the last debug connection leaving unfreezes the game and frees the seat it played', () => {
+  const { room } = makeRoom({ players: 2 }, { debugKeyHash: sha256Hex(TEST_KEY) });
+  const a = client(room), b = client(room);
+  a.hello('Owner'); b.hello('Guest'); a.send('start');
+  a.send('debug', { op: 'unlock', key: TEST_KEY });
+  a.send('debug', { op: 'possess', seat: 1 });
+  a.send('debug', { op: 'freeze' });
+  assert.equal(room.frozen, true);
+  a.drop();
+  assert.equal(room.frozen, false);
+  assert.equal(room.debugCtl, null);
+  assert.equal(b.state.game.frozen, false);
+});
