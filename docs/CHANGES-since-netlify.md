@@ -10,7 +10,7 @@ Unchanged, checked file by file: `rules.js` (rules, scoring, bot moves), `i18n.j
 
 | What | Why | Now |
 |---|---|---|
-| **The debug panel, opened by typing `debug()` in the console** (host only) | Deleted on purpose in the rebuild: it could show every player's hand. | **Restored**, with the old styling (`css/debug.css`) and wording. All of the old panel (every hand, table, deck, add/remove cards, undo, snapshots, set turn, scores and chkobbas, move cards between zones, force deal / score / win, bots, teams, "play as", freeze, spy mode) is now done by the referee through one `debug` message, the same code offline and online. Offline vs the bot it opens without a key. Online, without the owner's key it shows only what your browser has and marks the rest "hidden in online games: the server holds it"; the owner's key (checked by the server against a SHA-256 hash, tries rate-limited) unlocks everything for that one connection, and nobody else's browser ever receives hidden cards. The server side of the key is not configured yet (see the README). |
+| **The debug panel, opened by typing `debug()` in the console** (host only) | Deleted on purpose in the rebuild: it could show every player's hand. | **Restored**, with the old styling (`css/debug.css`) and wording. All of the old panel (every hand, table, deck, add/remove cards, undo, snapshots, set turn, scores and chkobbas, move cards between zones, force deal / score / win, bots, teams, "play as", freeze, spy mode) is now done by the referee through one `debug` message, the same code offline and online. Offline vs the bot it is all yours. Online it is the host's, as in the first version: the server sends the host's connection every hand and the deck. A guest's panel shows only what their browser has and marks the rest "hidden in online games: the server holds it"; a guest's browser never receives hidden cards. |
 | **"Only the host continues" on the round-end tally** | The rebuild made the next deal wait until every player had tapped continue. | **Restored.** The host taps to deal the next round; the others see "waiting for the host" and a tap only skips their own count, as before. The bot game continues on your one tap. |
 | Small confirmations: "Room ready" when a room is created, "Added Bot" / "Bot removed" in the lobby, "Rematch" when a rematch starts, and "Game resumed" in the move log after resuming a bot game | Lost when the lobby and game logic moved into the room. | **Restored.** |
 | The "Online play is unavailable: the server connection is not configured" banner on the menu | It was about a missing Firebase config. There is no config any more. | Not needed. If the server cannot be reached, the game says "Could not reach the game server. Check your connection." |
@@ -47,7 +47,7 @@ Unchanged, checked file by file: `rules.js` (rules, scoring, bot moves), `i18n.j
 - Buttons that wait on the server show a spinner and always come back; a move made against an old table gets "The table changed, try again" instead of being played twice.
 - An animation can no longer hold the board (cut after 6 s), and a hidden tab skips animations so it catches up at once.
 - A double tap can no longer pair with the last tap of the previous turn and place a card by itself.
-- `debug()` is no longer host-only: offline it is the full panel; online anyone can open the read-only view of their own data, and the full panel needs the owner's key instead of being the host. The verbose console logging switch (`?debug=1` or `localStorage.chkoba_debug = "true"`) is unchanged.
+- `debug()` online: the full panel is still the host's; a guest can now open a read-only view of their own data. The host's debug view comes from the server, so it stays with host control (if control passes on, the old host's view is turned off). The verbose console logging switch (`?debug=1` or `localStorage.chkoba_debug = "true"`) is unchanged.
 
 ## Added
 
@@ -55,5 +55,4 @@ Unchanged, checked file by file: `rules.js` (rules, scoring, bot moves), `i18n.j
 - **Let a bot play** for a player who has been gone for 60 s; the player gets their seat and hand back if they return.
 - **Emotes in the in-game menu** (and on landscape phones, only there).
 - **Debug panel "Net" tab** (new): the room, your seat, the host, the connection, whether this is a debug connection, the snapshot number and the last messages to and from the server.
-- **Debug key** (new): the owner's key unlocks the full debug panel in an online game for that connection only.
 - "A room code is 8 letters and digits" when a typed code is malformed. (A missing room now says "That room does not exist anymore" instead of "Room not found".)

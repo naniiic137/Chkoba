@@ -2,25 +2,21 @@
  * Brought back from the first version (the host's debug panel). The referee does the
  * work: every button sends one 'debug' message to the room (js/room.js, DEBUG_OPS),
  * so the offline game and an online game run the very same code.
- *   - offline (bot game): the room runs in this page and opens the panel without a
- *     key: every hand, the deck and every control.
- *   - online: the panel first shows what this browser has (its own hand, the table,
- *     the state, room, seats, connection, messages). The owner's key, checked by the
- *     server, unlocks the rest for this connection: debug("key") or the panel's key
- *     field. The key is kept in this browser and sent again after a reconnect. A
- *     connection without it never receives another hand or the deck.
+ *   - offline (bot game): the room runs in this page and opens the panel to its
+ *     player: every hand, the deck and every control.
+ *   - online: the host gets the full panel, as in the first version (the server
+ *     sends the host's connection every hand and the deck). Anyone else sees what
+ *     their browser has: their own hand, the table, the state, room, seats,
+ *     connection, messages; they never receive another hand or the deck.
  * Loaded after game.js; it adds its methods to `app`. */
 (function () {
   'use strict';
 
-  const KEY_STORE = 'chkobba_debug_key';
   const HIDDEN = 'hidden in online games: the server holds it';
   const dim = (text) => `<div style="color:var(--text-dim);padding:1rem;">${text}</div>`;
   const note = (text) => `<div class="debug-hidden-note">${escapeHtml(text)}</div>`;
   const cardTxt = (c) => `${c.display}${SUIT_SYMBOLS[c.suit] || ''}`;
   const val = (id, d) => { const el = document.getElementById(id); return el ? el.value : d; };
-  const readKey = () => { try { return localStorage.getItem(KEY_STORE) || ''; } catch (e) { return ''; } };
-  const storeKey = (k) => { try { if (k) localStorage.setItem(KEY_STORE, k); else localStorage.removeItem(KEY_STORE); } catch (e) { /* private mode */ } };
 
   Object.assign(app, {
     debugEnabled: false,
@@ -36,13 +32,8 @@
     // The seat played with "Play As", or null.
     debugCtl() { const d = this._dbg(); return d && d.ctl !== null && d.ctl !== undefined ? d.ctl : null; },
 
-    // debug() toggles the panel; debug("key") opens it and unlocks with that key.
-    toggleDebug(key) {
-      if (typeof key === 'string' && key) {
-        if (!this.debugEnabled) this.toggleDebug();
-        this.debugUnlock(key);
-        return 'debug panel open, unlocking';
-      }
+    // debug() toggles the panel.
+    toggleDebug() {
       this.debugEnabled = !this.debugEnabled;
       this._debugMinimized = false;
       this.log('info', 'debug mode', this.debugEnabled ? 'ON (verbose logging enabled)' : 'OFF');
@@ -53,32 +44,21 @@
       if (this.debugEnabled && panel) {
         this.updateDebugPanel();
         this.makeDebugDraggable(panel);
-        // offline needs no key; online a key kept in this browser is used again
-        if (!this._dbg() && (this._isBotGame || readKey())) this.debugUnlock('', true);
+        // the full view: offline, or online for the host
+        if (!this._dbg() && (this._isBotGame || this.isHost)) this.debugUnlock(true);
       }
       return this.debugEnabled ? 'debug panel open' : 'debug panel closed';
     },
 
-    // Makes this connection a debug connection. quiet: no toast unless it worked.
-    async debugUnlock(key, quiet) {
+    // Makes this connection a debug connection (the room allows the host only).
+    async debugUnlock(quiet) {
       if (!this.net) { if (!quiet) this.toast('No game'); return false; }
-      const k = this._isBotGame ? '' : (key || readKey());
-      if (!this._isBotGame && !k) { this.updateDebugPanel(); if (!quiet) this.toast('Enter the debug key'); return false; }
       let ack;
-      try { ack = await this.net.emit('debug', { op: 'unlock', key: k }); } catch (e) { if (!quiet) this.toast('Not connected, try again in a moment'); return false; }
-      if (ack.ok) {
-        this._debugUnlocked = true;
-        if (!this._isBotGame) storeKey(k);
-        if (!this._isBotGame && !quiet) this.toast('Debug unlocked');
-        this.updateDebugPanel();
-        return true;
-      }
-      if (ack.error === 'bad-key') { storeKey(''); this.toast('Wrong debug key'); }
-      else if (ack.error === 'slow-down') this.toast('Too many tries, wait a minute');
-      else if (ack.error === 'debug-off') this.toast('Debug is not set up on this server');
-      else if (!quiet) this.toast('Could not unlock debug');
+      try { ack = await this.net.emit('debug', { op: 'unlock' }); } catch (e) { if (!quiet) this.toast('Not connected, try again in a moment'); return false; }
+      if (ack.ok) this._debugUnlocked = true;
+      else if (!quiet) this.toast('Debug is host-only');
       this.updateDebugPanel();
-      return false;
+      return !!ack.ok;
     },
 
     minimizeDebug() {
@@ -144,23 +124,11 @@
       const body = document.getElementById('debug-body');
       if (!body) return;
       const mode = document.getElementById('debug-mode');
-      if (mode) mode.textContent = !this.net ? '' : this._isBotGame ? 'OFFLINE · FULL' : this._dbg() ? 'ONLINE · FULL (KEY)' : 'ONLINE · THIS SEAT ONLY';
-      // keep a key being typed
-      const typing = document.activeElement && document.activeElement.id === 'debug-key';
-      if (typing) return;
-      const lock = this.net && !this._isBotGame && !this._dbg() ? this.renderDebugLock() : '';
-      if (this.debugTab === 'net') { body.innerHTML = lock + this.renderDebugNet(); return; }
-      if (!this.gameState) { body.innerHTML = lock + dim('No game in progress'); return; }
+      if (mode) mode.textContent = !this.net ? '' : this._isBotGame ? 'OFFLINE · FULL' : this._dbg() ? 'ONLINE · HOST · FULL' : 'ONLINE · THIS SEAT ONLY';
+      if (this.debugTab === 'net') { body.innerHTML = this.renderDebugNet(); return; }
+      if (!this.gameState) { body.innerHTML = dim('No game in progress'); return; }
       const html = { hands: () => this.renderDebugHands(), table: () => this.renderDebugTable(), deck: () => this.renderDebugDeck(), controls: () => this.renderDebugControls() }[this.debugTab];
-      body.innerHTML = lock + (html ? html() : '');
-    },
-
-    renderDebugLock() {
-      return `<div class="debug-section"><div class="debug-section-title">Owner key</div>
-        <div class="debug-controls-row"><input type="password" id="debug-key" class="debug-select" placeholder="debug key" autocomplete="off" style="flex:1;"
-          onkeydown="if (event.key === 'Enter') app.debugUnlock(this.value)">
-        <button class="btn-debug" onclick="app.debugUnlock(document.getElementById('debug-key').value)">Unlock</button></div>
-        ${note('Without the key: your own hand only. Other hands and the deck are ' + HIDDEN + '.')}</div>`;
+      body.innerHTML = html ? html() : '';
     },
 
     // ---------- tabs ----------
@@ -211,7 +179,7 @@
         <div>${tableHtml}</div>
         <div style="margin-top:0.5rem;">${D ? `<div class="debug-controls-row">
           <select id="debug-table-card-select" class="debug-select">${this.getCardOptionsHtml()}</select>
-          <button class="btn-debug" onclick="app.debugAddTableCard()">Add to Table</button></div>` : note('Editing the table needs the debug key.')}</div>
+          <button class="btn-debug" onclick="app.debugAddTableCard()">Add to Table</button></div>` : note('Editing the table: host only.')}</div>
       </div>`;
     },
 
@@ -258,7 +226,7 @@
       if (!D) {
         return `${this.stateInfoHtml()}
           <div class="debug-section"><div class="debug-section-title">Undo / Turn / Score / Cards / Bots / Teams / Play As / Freeze / Spy</div>
-            ${note('These need the debug key. Other hands and the deck: ' + HIDDEN + '.')}</div>`;
+            ${note('Host only. Other hands and the deck: ' + HIDDEN + '.')}</div>`;
       }
       const playerOpts = gs.players.map((p) => `<option value="${p.id}">P${p.id} ${escapeHtml(p.name)}</option>`).join('');
       const ctl = this.debugCtl();
@@ -398,7 +366,7 @@
       if (this.debugEnabled && this.debugTab === 'net') this.updateDebugPanel();
     },
 
-    // Called by bindNet: notes every message to and from the room (never the key).
+    // Called by bindNet: notes every message to and from the room.
     debugWatchNet(net) {
       ['state', 'notice', 'emote', 'status', 'timeout', 'fatal'].forEach((t) => net.on(t, (m) => {
         if (this.net !== net) return;
@@ -424,7 +392,7 @@
 
     // After a hello (a new socket after a drop, or a new room): debug again if it was on.
     debugAfterHello() {
-      if (this._debugUnlocked || (this.debugEnabled && (this._isBotGame || readKey()))) this.debugUnlock('', true);
+      if (this._debugUnlocked || this.debugEnabled) this.debugUnlock(true);
     },
 
     // The hand shown at the bottom: my own, or the seat played with "Play As".
@@ -450,7 +418,7 @@
     // ---------- the panel's buttons: one 'debug' message each ----------
     async _dbgOp(op, args) {
       if (!this.net) { this.toast('No game'); return null; }
-      if (!this._dbg()) { this.toast('Debug: unlock first'); return null; }
+      if (!this._dbg()) { this.toast('Debug is host-only'); return null; }
       let ack;
       try { ack = await this.net.emit('debug', { ...(args || {}), op }); } catch (e) { this.toast('Not connected, try again in a moment'); return null; }
       if (ack.text) this.toast(ack.text);
@@ -494,7 +462,7 @@
     debugToggleFreeze() { return this._dbgOp('freeze'); },
 
     debugToggleSpy() {
-      if (!this._dbg()) { this.toast('Debug: unlock first'); return; }
+      if (!this._dbg()) { this.toast('Debug is host-only'); return; }
       this._spyMode = !this._spyMode;
       this.toast(this._spyMode ? 'Spy Mode ON — seeing all hands' : 'Spy Mode OFF');
       this.renderGame();
@@ -531,6 +499,6 @@
     },
   });
 
-  // typed in the console: debug() or debug("key")
-  window.debug = (key) => app.toggleDebug(key);
+  // typed in the console
+  window.debug = () => app.toggleDebug();
 })();

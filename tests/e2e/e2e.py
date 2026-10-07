@@ -12,7 +12,6 @@ Moves are chosen with the page's own rules module and made by clicking the cards
 the Capture / Place buttons, like a player would.
 """
 import json
-import os
 import sys
 import time
 
@@ -256,9 +255,8 @@ def away_flow(browser, base):
 
 
 def debug_panel(browser, base):
-    """debug() in the console opens the debug panel: everything offline; online this seat
-    only, or everything once the owner's key unlocks it (CHKOBBA_DEBUG_KEY in the environment;
-    without it the unlocked part is skipped)."""
+    """debug() in the console opens the debug panel: everything offline; online everything
+    for the host, this seat only for a guest."""
     # offline vs the bot: every hand, the deck, and the cheats
     ctx, page = new_player(browser, base, 'DBG', block_ws=True)
     page.click('#m-bot')
@@ -266,7 +264,7 @@ def debug_panel(browser, base):
     page.wait_for_function("() => app.gameState && app.gameState.phase === 'playing' && app.myHand.length === 3 && !app._animating")
     assert page.evaluate("() => debug()") == 'debug panel open'
     page.wait_for_selector('#debug-panel:not(.hidden)')
-    page.wait_for_function("() => !!app.snap.debug")   # the in-page room opens it without a key
+    page.wait_for_function("() => !!app.snap.debug")   # the in-page room opens it to its player
     assert 'OFFLINE' in page.inner_text('#debug-mode')
     both = page.evaluate("() => app.localRoom.gs.hands.map((h) => h.length)")
     assert page.locator('#debug-body .debug-card').count() == sum(both), 'every hand is listed offline'
@@ -297,7 +295,7 @@ def debug_panel(browser, base):
     print('  offline: debug() shows every hand and the deck; spy, play as and undo work')
     ctx.close()
 
-    # online: only this seat's hand; the rest is marked hidden
+    # online, a guest: only this seat's hand; the rest is marked hidden
     ca, a = new_player(browser, base, 'DA')
     cb, b = new_player(browser, base, 'DB')
     code, link = create_room(a, 'Ana')
@@ -318,28 +316,23 @@ def debug_panel(browser, base):
     net = b.text_content('#debug-body')
     assert code in net and 'state rev' in net, net
     print('  online: debug() shows this seat only, room and messages; other hands marked hidden')
-    key = os.environ.get('CHKOBBA_DEBUG_KEY', '')
-    if not key:
-        print('  online with the key: skipped (set CHKOBBA_DEBUG_KEY)')
-    else:
-        # the host unlocks with the key: the guest's hand, Play As, force a win
-        a.evaluate("(k) => debug(k)", key)
-        a.wait_for_function("() => !!app.snap.debug", timeout=10000)
-        assert 'FULL' in a.inner_text('#debug-mode')
-        guest = b.evaluate("() => app.myHand.map((c) => c.id)")
-        assert a.evaluate("() => app.snap.debug.hands[1].map((c) => c.id)") == guest
-        assert b.evaluate("() => app.snap.debug === undefined"), 'the guest got the debug view'
-        a.click('.debug-tab[data-tab="controls"]')
-        a.click('text=Play As')
-        a.wait_for_function("() => app.debugCtl() === 1")
-        assert a.evaluate("() => app.myHand.map((c) => c.id)") == guest
-        a.click('#debug-body button:has-text("Release")')
-        a.wait_for_function("() => app.debugCtl() === null")
-        a.click('#debug-body button:has-text("Win T2")')
-        b.wait_for_selector('#ov-match.open', timeout=10000)
-        assert b.evaluate("() => app.gameState.winner") == 1
-        assert a.evaluate("() => localStorage.getItem('chkobba_debug_key')") == key
-        print('  online with the key: the guest\'s hand, Play As and a forced win; the guest gets no debug view')
+    # the host: the full panel, the guest's hand, Play As, a forced win
+    a.evaluate("() => debug()")
+    a.wait_for_function("() => !!app.snap.debug", timeout=10000)
+    assert 'FULL' in a.inner_text('#debug-mode')
+    guest = b.evaluate("() => app.myHand.map((c) => c.id)")
+    assert a.evaluate("() => app.snap.debug.hands[1].map((c) => c.id)") == guest
+    assert b.evaluate("() => app.snap.debug === undefined"), 'the guest got the debug view'
+    a.click('.debug-tab[data-tab="controls"]')
+    a.click('text=Play As')
+    a.wait_for_function("() => app.debugCtl() === 1")
+    assert a.evaluate("() => app.myHand.map((c) => c.id)") == guest
+    a.click('#debug-body button:has-text("Release")')
+    a.wait_for_function("() => app.debugCtl() === null")
+    a.click('#debug-body button:has-text("Win T2")')
+    b.wait_for_selector('#ov-match.open', timeout=10000)
+    assert b.evaluate("() => app.gameState.winner") == 1
+    print("  online, the host: the guest's hand, Play As and a forced win; the guest gets no debug view")
     ca.close()
     cb.close()
 
