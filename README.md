@@ -139,7 +139,8 @@ chkoba/
 │   │   ├── fire.js           # Pixel fire for the chkobba slam and the tally
 │   │   ├── juice.js          # Motion: tags, slam, flights, count-ups, shake, text-fill, sounds
 │   │   ├── cards.js          # Card renderer: photo / flat / pixel, French or coin suits
-│   │   └── look.js           # Room look (host-owned) and personal comfort settings
+│   │   ├── look.js           # Room look (host-owned) and personal comfort settings
+│   │   └── debug.js          # The debug panel: debug() in the console
 │   └── images/               # 40 PNG card faces
 ├── worker/index.js           # Cloudflare Worker: assets, POST /api/rooms, /ws -> Room Durable Object
 ├── wrangler.jsonc            # Worker config: assets, Durable Object binding and migration, ALLOWED_HOSTS
@@ -181,9 +182,14 @@ npx wrangler dev --port 8794                              # then:
 python tests/e2e/e2e.py online http://127.0.0.1:8794
 ```
 
-## Debug logging
+## Debug panel and logging
 
-Add `?debug=1` to the URL, or set `localStorage.chkoba_debug = "true"`, to turn on verbose logging in the browser console.
+Type `debug()` in the browser console to open the debug panel (type it again, or press Escape, to close it). It opens verbose logging too.
+
+- **Offline bot game:** the room runs in your page, so the panel shows and changes everything, as the first version's host panel did: every hand, the table, the deck, add or remove cards, undo, snapshots, set the turn, scores and chkobbas, move cards between zones, force a deal, a score or a win, bots, teams, "play as" another seat, freeze and spy mode.
+- **Online game:** your browser only ever receives your own hand, and the panel does not change that. It shows your hand, the table, the scores and the state, the room and its seats, the connection, and the last messages to and from the server. Other hands and the deck order are marked "hidden in online games: the server holds it". The host also gets the room's rule switches.
+
+For verbose logging without the panel, add `?debug=1` to the URL, or set `localStorage.chkoba_debug = "true"`.
 
 ## Tech stack
 

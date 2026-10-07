@@ -11,6 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;700&family=Lalezar&family=Rubik:wght@400;600;700;900&family=Cinzel:wght@700;900&family=Oswald:wght@500;700&family=Aref+Ruqaa:wght@700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/tokens.css">
   <link rel="stylesheet" href="css/game.css">
+  <link rel="stylesheet" href="css/debug.css">
 </head>
 <body>
   <canvas id="bg-shader" aria-hidden="true"></canvas>
@@ -242,6 +243,25 @@
 
   <div class="stage-fx" aria-hidden="true"><div class="fx-grain"></div><div class="fx-scanline"></div></div>
 
+  <!-- ============ DEBUG PANEL: type debug() in the browser console ============ -->
+  <div id="debug-panel" class="debug-panel hidden">
+    <div class="debug-header">
+      <span>🔧 DEBUG MODE <small id="debug-mode" style="font-size:0.6rem;letter-spacing:1px;opacity:.75"></small></span>
+      <div style="display:flex;gap:0.3rem;">
+        <button class="btn-debug-close" onclick="app.minimizeDebug()" title="Minimize">─</button>
+        <button class="btn-debug-close" onclick="app.toggleDebug()" title="Close">✕</button>
+      </div>
+    </div>
+    <div class="debug-tabs">
+      <button class="debug-tab active" data-tab="hands" onclick="app.switchDebugTab('hands')">Hands</button>
+      <button class="debug-tab" data-tab="table" onclick="app.switchDebugTab('table')">Table</button>
+      <button class="debug-tab" data-tab="deck" onclick="app.switchDebugTab('deck')">Deck</button>
+      <button class="debug-tab" data-tab="controls" onclick="app.switchDebugTab('controls')">Controls</button>
+      <button class="debug-tab" data-tab="net" onclick="app.switchDebugTab('net')">Net</button>
+    </div>
+    <div class="debug-body" id="debug-body"></div>
+  </div>
+
   <script src="server.js"></script>
   <script src="js/rules.js"></script>
   <script src="js/room.js"></script>
@@ -253,5 +273,6 @@
   <script src="js/cards.js"></script>
   <script src="js/look.js"></script>
   <script src="game.js"></script>
+  <script src="js/debug.js"></script>
 </body>
 </html>

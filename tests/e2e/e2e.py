@@ -3,6 +3,7 @@ per player. Start a server first, then:
 
   python tests/e2e/e2e.py local   http://127.0.0.1:3110    # npm start: 2p round, 4p teams, reload, offline bot
   python tests/e2e/e2e.py away    http://127.0.0.1:3110    # a drop, the 60 s hold, a bot takes the seat
+  python tests/e2e/e2e.py debug   http://127.0.0.1:3110    # debug() offline (everything) and online (own seat)
   python tests/e2e/e2e.py online  http://127.0.0.1:8794    # wrangler dev: the 2-player round
   python tests/e2e/e2e.py split   http://127.0.0.1:8795 http://127.0.0.1:8794
         # Pages-style: the page from a static server, the rooms from the Worker
@@ -253,6 +254,68 @@ def away_flow(browser, base):
     ca.close()
 
 
+def debug_panel(browser, base):
+    """debug() in the console opens the debug panel: everything offline, this seat only online."""
+    # offline vs the bot: every hand, the deck, and the cheats
+    ctx, page = new_player(browser, base, 'DBG', block_ws=True)
+    page.click('#m-bot')
+    wait_screen(page, 'game')
+    page.wait_for_function("() => app.gameState && app.gameState.phase === 'playing' && app.myHand.length === 3 && !app._animating")
+    assert page.evaluate("() => debug()") == 'debug panel open'
+    page.wait_for_selector('#debug-panel:not(.hidden)')
+    assert 'OFFLINE' in page.inner_text('#debug-mode')
+    both = page.evaluate("() => app.localRoom.gs.hands.map((h) => h.length)")
+    assert page.locator('#debug-body .debug-card').count() == sum(both), 'every hand is listed offline'
+    page.click('.debug-tab[data-tab="deck"]')
+    assert 'Deck (top' in page.text_content('#debug-body')
+    page.click('.debug-tab[data-tab="controls"]')
+    page.click('text=Spy Mode (See All Hands)')
+    page.wait_for_selector('.opp .spy span')
+    # play as the bot's seat, then give it back
+    page.click('text=Play As')
+    page.wait_for_selector('#possess-banner')
+    bot_hand = page.evaluate("() => app.localRoom.gs.hands[1].map((c) => c.id)")
+    assert page.evaluate("() => app.myHand.map((c) => c.id)") == bot_hand
+    assert 'CONTROLLING' in page.text_content('#possess-banner').upper()
+    page.click('#debug-body button:has-text("Release")')
+    page.wait_for_function("() => app._controllingPlayerId === null")
+    page.evaluate("() => app.minimizeDebug()")   # the panel sits over the hand on a phone
+    # a move, then undo it
+    play_until([page], lambda: page.evaluate("() => app.gameState.moveSeq >= 2"), what='two moves')
+    page.wait_for_function("() => !app._animating")
+    seq = page.evaluate("() => app.localRoom.gs.moveSeq")
+    page.evaluate("() => { app._gameFrozen = true; app.localRoom._clearTimer('turn'); app.debugUndo(); }")
+    page.wait_for_function(f"() => app.gameState.moveSeq === {seq - 1}")
+    page.evaluate("() => debug()")
+    page.wait_for_selector('#debug-panel.hidden', state='attached')
+    print('  offline: debug() shows every hand and the deck; spy, play as and undo work')
+    ctx.close()
+
+    # online: only this seat's hand; the rest is marked hidden
+    ca, a = new_player(browser, base, 'DA')
+    cb, b = new_player(browser, base, 'DB')
+    code, link = create_room(a, 'Ana')
+    join_by_link(b, link, 'Ben')
+    a.wait_for_function("!document.getElementById('w-start').disabled")
+    a.click('#w-start')
+    wait_screen(b, 'game')
+    b.wait_for_function("() => app.myHand.length === 3")
+    b.evaluate("() => debug()")
+    b.wait_for_selector('#debug-panel:not(.hidden)')
+    assert 'ONLINE' in b.inner_text('#debug-mode')
+    text = b.text_content('#debug-body')
+    assert 'hidden in online games: the server holds it' in text, text
+    assert b.locator('#debug-body .debug-card').count() == 3, 'only my own three cards'
+    b.click('.debug-tab[data-tab="deck"]')
+    assert 'hidden in online games' in b.text_content('#debug-body')
+    b.click('.debug-tab[data-tab="net"]')
+    net = b.text_content('#debug-body')
+    assert code in net and 'state rev' in net, net
+    print('  online: debug() shows this seat only, room and messages; other hands marked hidden')
+    ca.close()
+    cb.close()
+
+
 def main():
     mode, base = sys.argv[1], sys.argv[2].rstrip('/') + '/'
     server = sys.argv[3] if len(sys.argv) > 3 else None
@@ -263,6 +326,9 @@ def main():
                 two_player_round(browser, base, reload_check=True)
                 four_player_teams(browser, base)
                 offline_bot(browser, base)
+                debug_panel(browser, base)
+            elif mode == 'debug':
+                debug_panel(browser, base)
             elif mode == 'online':
                 two_player_round(browser, base)
             elif mode == 'split':

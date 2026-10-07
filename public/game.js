@@ -89,9 +89,9 @@ const app = {
 
   // ========== LOGGING ==========
   // Leveled logger. error/warn always print; info/debug print only in verbose mode
-  // (?debug=1, or localStorage chkoba_debug="true").
+  // (debug panel open, ?debug=1, or localStorage chkoba_debug="true").
   log(level, ...args) {
-    if ((level === 'info' || level === 'debug') && !this._verbose) return;
+    if ((level === 'info' || level === 'debug') && !this._verbose && !this.debugEnabled) return;
     const fn = level === 'error' ? console.error
       : level === 'warn' ? console.warn
       : level === 'debug' ? console.debug
@@ -136,6 +136,7 @@ const app = {
 
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
+      if (this.debugEnabled) { this.toggleDebug(); return; }
       if (this.menuOpen) { this.toggleMenu(); return; }
       const open = document.querySelector('.overlay.open');
       if (open && open.id !== 'ov-ceremony' && open.id !== 'ov-match') { this.closeOverlay(open.id); return; }
@@ -409,6 +410,7 @@ const app = {
 
   bindNet(net) {
     const live = (fn) => (...a) => { if (this.net === net) fn(...a); };
+    this.debugWatchNet(net);   // the debug panel's message log
     net.on('open', live(() => this.sayHello()));
     net.on('state', live((m) => this.applySnapshot(m.s)));
     net.on('notice', live((m) => { this.toast(m.text); if (/ran out of time/.test(m.text)) this.playSound('timeout'); }));
@@ -489,6 +491,7 @@ const app = {
     this.selectedCardIndex = -1; this.selectedCaptureIndices = []; this.availableCaptures = [];
     this.isSubmittingMove = false; this._afterHello = null;
     this.moveLog = []; this._awayUntil = {}; this._awayDismissed = {};
+    this.debugReset();
     this._ceremonyKey = ''; this._matchKey = ''; this._ceremonyContinue = null; this._ceremonyDone = false;
     this.stopTurnTimer();
     this.closeAllOverlays();
@@ -570,6 +573,7 @@ const app = {
       this.handleStateUpdate(s.game, s.hand);
     }
     if (this.menuOpen) this.renderMenuContent();
+    if (!s.game) this.updateDebugPanel();
     document.getElementById('match-again').hidden = !this.isHost;   // the host may have changed
     // the host may have changed while the tally is up: its continue line follows
     if (this._ceremonyDone && this.gameState && this.gameState.phase === 'round_end' && document.getElementById('ov-ceremony').classList.contains('open')) this.setContinue();
@@ -584,7 +588,7 @@ const app = {
       lastMove: data.lastMove ? { ...data.lastMove, taken: data.lastMove.taken || [] } : null,
       nextDealerTurn: data.nextDealerTurn !== -1 ? data.nextDealerTurn : undefined,
     };
-    this.myHand = hand || [];
+    this.myHand = this.debugHand(hand || []);   // or the seat played from the debug panel
     if (turnChanged) {
       this.selectedCardIndex = -1;
       this.selectedCaptureIndices = [];
@@ -602,8 +606,8 @@ const app = {
     else this.stopTurnTimer();
   },
 
-  // The seat this browser plays.
-  activeId() { return this.myPlayerId; },
+  // The seat this browser plays: its own, or (offline) the one played from the debug panel.
+  activeId() { return this._controllingPlayerId !== null && this._isBotGame ? this._controllingPlayerId : this.myPlayerId; },
 
   // A small banner while the socket is down; the snapshot after the reconnect catches up.
   renderNet(status) {
@@ -757,13 +761,14 @@ const app = {
 
   localEnv() {
     // alone with a bot, the tally waits for the player's tap instead of moving on after 30 s
-    return { autoContinueMs: 0, onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
+    return { autoContinueMs: 0, onChange: (room) => { this.saveBotGame(room); this.debugRecord(room); }, log: (level, ...a) => this.log(level, '[room]', ...a) };
   },
 
   startLocalRoom(room, name, token) {
     this.closeRoom();
     this._isBotGame = true;
     this.localRoom = room;
+    this.debugWrapRoom(room);   // freeze and "play as" from the debug panel
     this.roomCode = 'BOT';
     this.roomLink = '';
     this.myName = name;
@@ -1011,7 +1016,10 @@ const app = {
     this.isSubmittingMove = true;
     this.refreshSelection();
     this.log('debug', 'sending move', { cardId, captureCardIds, seq: gs.moveSeq });
-    this.net.emit('move', { game: gs.gameToken, seq: gs.moveSeq, cardId, captureCardIds })
+    const send = this._controllingPlayerId !== null && this._isBotGame
+      ? Promise.resolve(this.debugPlayAs(cardId, captureCardIds))   // playing as another seat (debug panel)
+      : this.net.emit('move', { game: gs.gameToken, seq: gs.moveSeq, cardId, captureCardIds });
+    send
       .then((ack) => {
         if (ack.ok) return;
         if (ack.error === 'illegal' && card) this.blockedMove({ reason: ack.reason, mustTake: ack.mustTake || [] }, card);
@@ -1064,7 +1072,9 @@ const app = {
     const prev = this._shown;
     const cur = this._snapshot(gs);
     // a hidden tab gets no animation: it would only queue up behind the timers
-    const anim = Look.prefs.animations && !document.hidden && document.documentElement.dataset.screen === 'game';
+    // a change made from the debug panel jumps straight to the new table
+    const anim = Look.prefs.animations && !document.hidden && document.documentElement.dataset.screen === 'game' && !this._debugJump;
+    this._debugJump = false;
     const sameGame = prev && prev.gameToken === cur.gameToken;
 
     const mv = gs.lastMove;
@@ -1106,6 +1116,8 @@ const app = {
     try { this.renderHand(gs); } catch (e) { this.log('error', 'renderHand:', e.message); }
     try { this.renderCaptured(gs); } catch (e) { this.log('error', 'renderCaptured:', e.message); }
     try { this.refreshSelection(); } catch (e) { this.log('error', 'refreshSelection:', e.message); }
+    try { this.renderBanners(gs); } catch (e) { this.log('error', 'renderBanners:', e.message); }
+    try { this.updateDebugPanel(); } catch (e) { /* silent */ }
     try { if (this.menuOpen) this.renderMenuContent(); } catch (e) { /* silent */ }
   },
 
@@ -1145,6 +1157,7 @@ const app = {
     if (gs.phase === 'round_end') { el.textContent = I18N.text('roundEnd'); el.classList.add('text'); Juice.fill(el, 1); return; }
     if (gs.phase === 'finished') { el.textContent = I18N.text('gameOver'); el.classList.add('text'); Juice.fill(el, 1); return; }
     if (gs.phase !== 'playing') { el.textContent = ''; return; }
+    if (this._gameFrozen && this._isBotGame) { el.textContent = I18N.text('paused'); el.classList.add('mult'); Juice.fill(el, 1); return; }
     if (gs.currentTurn < 0) { el.textContent = I18N.text('dealing'); el.classList.add('text'); Juice.fill(el, 0); return; }
     if (gs.currentTurn === this.activeId()) { el.textContent = I18N.text('yourTurn'); return; }
     const p = gs.players[gs.currentTurn];
@@ -1162,15 +1175,23 @@ const app = {
     const isBot = !!player.isBot;
     const seat = this.snap && this.snap.seats[player.id];
     const away = !!seat && !!seat.away && !seat.takeover;
+    const isControlled = this._isBotGame && this._controllingPlayerId === player.id;   // debug panel: "play as"
     const el = document.createElement('div');
-    el.className = `opp t${player.team + 1}${isTurn ? ' active-turn' : ''}${side ? ' side' : ''}${away ? ' away' : ''}`;
+    el.className = `opp t${player.team + 1}${isTurn ? ' active-turn' : ''}${side ? ' side' : ''}${away ? ' away' : ''}${isControlled ? ' controlled' : ''}`;
     el.dataset.player = player.id;
     el.innerHTML = `<div class="av">${isBot ? 'BOT' : escapeHtml(player.name.charAt(0).toUpperCase())}</div>
-      <div class="meta"><div class="name">${escapeHtml(player.name)}${away ? ' <span class="badge mult">offline</span>' : ''}</div>
+      <div class="meta"><div class="name">${escapeHtml(player.name)}${away ? ' <span class="badge mult">offline</span>' : ''}${isControlled ? ' <span class="ctrl">CTRL</span>' : ''}</div>
         <div class="backs" aria-label="${n} cards in hand"></div>
         <div class="cap">${I18N.text('karta')} <b>${cap}</b>${shk ? ` <span class="badge haya">+${shk}</span>` : ''}</div></div>`;
     const backs = el.querySelector('.backs');
     for (let i = 0; i < n; i++) backs.appendChild(Cards.back(true));
+    // spy mode (debug panel, offline only: online this browser never has another hand)
+    const spyHand = this.debugSpyHand(player.id);
+    if (spyHand) {
+      const spy = document.createElement('div'); spy.className = 'spy';
+      spy.innerHTML = spyHand.map((c) => `<span>${c.display}${SUIT_SYMBOLS[c.suit] || ''}</span>`).join('');
+      el.querySelector('.meta').appendChild(spy);
+    }
     return el;
   },
 
