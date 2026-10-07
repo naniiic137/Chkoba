@@ -769,8 +769,7 @@ const app = {
   },
 
   localEnv() {
-    // alone with a bot, the tally waits for the player's tap instead of moving on after 30 s
-    return { autoContinueMs: 0, debugOpen: true, onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
+    return { debugOpen: true, onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
   },
 
   startLocalRoom(room, name, token) {
@@ -1573,8 +1572,7 @@ const app = {
   // As in the first version, the host decides when the next deal goes out: the host
   // gets "tap to continue", everyone else "waiting for the host" (a tap there only
   // skips their own count). If the host drops, control passes on and the new host's
-  // tally switches to "tap to continue". Online, the room also moves on by itself
-  // after 30 s as a safety net; a bot game waits for the tap.
+  // tally switches to "tap to continue". The tally waits for that tap.
   setContinue() {
     this._ceremonyDone = true;
     const skip = document.getElementById('cer-skip');

@@ -298,7 +298,7 @@ test('the turn timer plays for a player who runs out of time', () => {
   assert.ok(clients[0].inbox.some((m) => m.t === 'notice' && /ran out of time/.test(m.text)));
 });
 
-test('the host moves the tally on; a guest waits; 30 s is the safety net', () => {
+test('the host moves the tally on; a guest waits; nothing moves it on by itself', () => {
   // the host's single tap deals the next round, whatever the guest does
   let { room, clock, clients } = startedRoom(2, { winScore: 31 });
   playUntil(clients, clock, () => room.gs.phase === 'round_end');
@@ -307,13 +307,11 @@ test('the host moves the tally on; a guest waits; 30 s is the safety net', () =>
   assert.equal(room.gs.phase, 'round_end');
   assert.equal(clients[0].send('continue').ok, true);
   assert.equal(room.gs.phase, 'playing');
-  // nobody taps: the room moves on by itself after 30 s
+  // nobody taps: the tally waits for the host, however long
   ({ room, clock, clients } = startedRoom(2, { winScore: 31 }));
   playUntil(clients, clock, () => room.gs.phase === 'round_end');
-  clock.tick(27000);   // playUntil steps the clock 2.5 s at a time: up to that much has gone already
+  clock.tick(600000);
   assert.equal(room.gs.phase, 'round_end');
-  clock.tick(4000);
-  assert.equal(room.gs.phase, 'playing');
   // the host drops on the tally: control passes to the guest, whose tap continues
   ({ room, clock, clients } = startedRoom(2, { winScore: 31 }));
   playUntil(clients, clock, () => room.gs.phase === 'round_end');
@@ -321,8 +319,8 @@ test('the host moves the tally on; a guest waits; 30 s is the safety net', () =>
   assert.equal(clients[1].state.owner, 1);
   assert.equal(clients[1].send('continue').ok, true);
   assert.equal(room.gs.phase, 'playing');
-  // alone with a bot (autoContinueMs 0) the tally waits for the player's tap
-  const solo = makeRoom({ players: 2, speed: 'fast' }, { autoContinueMs: 0 });
+  // alone with a bot the tally waits for the player's tap
+  const solo = makeRoom({ players: 2, speed: 'fast' });
   const me = client(solo.room);
   me.hello('P'); me.send('addBot', { slot: 1 }); me.send('start');
   playUntil([me], solo.clock, () => solo.room.gs.phase === 'round_end');

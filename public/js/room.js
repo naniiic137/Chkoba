@@ -38,7 +38,6 @@
   const CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/;
 
   const HOLD_MS = 60000;            // a dropped player's seat is kept this long before others may act
-  const ROUND_END_AUTO_MS = 30000;  // safety net: the tally moves on by itself if the host never taps continue
   const MAX_MESSAGE = 4096;         // bytes; every real message is far smaller
   const RATE_WINDOW_MS = 5000, RATE_MAX = 40;
   const EMOTE_GAP_MS = 800;
@@ -130,7 +129,7 @@
 
   class Room {
     // opts: room options (see normalizeOpts) plus code.
-    // env:  { clock, holdMs, autoContinueMs (0: the tally waits for the host's tap), onChange(room),
+    // env:  { clock, holdMs, onChange(room),
     //         onClose(room), log(level, ...args),
     //         debugOpen (the offline game: the debug panel is open to its player) }
     constructor(opts, env) {
@@ -138,7 +137,6 @@
       this.code = (opts && opts.code) || '';
       this.clock = env.clock || realClock;
       this.holdMs = env.holdMs !== undefined ? env.holdMs : HOLD_MS;
-      this.autoContinueMs = env.autoContinueMs !== undefined ? env.autoContinueMs : ROUND_END_AUTO_MS;
       this.onChange = env.onChange || null;
       this.onClose = env.onClose || null;
       this.log = env.log || (() => {});
@@ -410,10 +408,7 @@
       delay = delay || 0;
       const token = gs.gameToken, seq = gs.moveSeq;
       const same = () => this.gs === gs && gs.gameToken === token && gs.moveSeq === seq;
-      if (gs.phase === 'round_end') {
-        if (this.autoContinueMs > 0) this._setTimer('turn', delay + this.autoContinueMs, () => { if (same()) this._nextRound(); });
-        return;
-      }
+      // the round-end tally waits for the host's tap
       if (gs.phase !== 'playing') return;
       if (gs.currentTurn < 0) {
         if (gs.hands.every((h) => h.length === 0)) this._setTimer('turn', delay + 400, () => { if (same()) this._endRound(); });
@@ -1060,6 +1055,6 @@
 
   return {
     Room, HANDLERS, DEBUG_OPS, normalizeOpts, normalizeLook, newRoomCode, isRoomCode, newToken, createDeck, cardName,
-    HOLD_MS, ROUND_END_AUTO_MS, BOT_NAMES, EMOTES, moveAnimMs, dealAnimMs,
+    HOLD_MS, BOT_NAMES, EMOTES, moveAnimMs, dealAnimMs,
   };
 });
