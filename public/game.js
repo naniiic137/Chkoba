@@ -448,6 +448,7 @@ const app = {
     this._wasDropped = false;
     this.log('info', 'seated in', this.roomCode, 'as', ack.seat, resumed ? '(resumed)' : '');
     if (done) done();
+    this.debugAfterHello();   // the debug panel's connection again after a drop
     if (this._afterHello) { const next = this._afterHello; this._afterHello = null; next().catch((e) => this.log('error', 'bot game setup failed:', e)); }
   },
 
@@ -608,7 +609,7 @@ const app = {
   },
 
   // The seat this browser plays: its own, or (offline) the one played from the debug panel.
-  activeId() { return this._controllingPlayerId !== null && this._isBotGame ? this._controllingPlayerId : this.myPlayerId; },
+  activeId() { const c = this.debugCtl(); return c !== null ? c : this.myPlayerId; },
 
   // A small banner while the socket is down; the snapshot after the reconnect catches up.
   renderNet(status) {
@@ -769,14 +770,13 @@ const app = {
 
   localEnv() {
     // alone with a bot, the tally waits for the player's tap instead of moving on after 30 s
-    return { autoContinueMs: 0, onChange: (room) => { this.saveBotGame(room); this.debugRecord(room); }, log: (level, ...a) => this.log(level, '[room]', ...a) };
+    return { autoContinueMs: 0, debugOpen: true, onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
   },
 
   startLocalRoom(room, name, token) {
     this.closeRoom();
     this._isBotGame = true;
     this.localRoom = room;
-    this.debugWrapRoom(room);   // freeze and "play as" from the debug panel
     this.roomCode = 'BOT';
     this.roomLink = '';
     this.myName = name;
@@ -889,6 +889,7 @@ const app = {
   canAct() {
     const gs = this.gameState;
     if (!gs || !this.net || this.net.status !== 'open') return false;
+    if (gs.frozen && !this._dbg()) return false;   // paused from the debug panel
     return gs.phase === 'playing' && gs.currentTurn === this.activeId() && !this.isSubmittingMove && !this._animating;
   },
 
@@ -1025,13 +1026,14 @@ const app = {
     this.isSubmittingMove = true;
     this.refreshSelection();
     this.log('debug', 'sending move', { cardId, captureCardIds, seq: gs.moveSeq });
-    const send = this._controllingPlayerId !== null && this._isBotGame
-      ? Promise.resolve(this.debugPlayAs(cardId, captureCardIds))   // playing as another seat (debug panel)
+    const send = this.debugCtl() !== null
+      ? this.debugMove(cardId, captureCardIds)   // playing as another seat (debug panel)
       : this.net.emit('move', { game: gs.gameToken, seq: gs.moveSeq, cardId, captureCardIds });
     send
       .then((ack) => {
         if (ack.ok) return;
         if (ack.error === 'illegal' && card) this.blockedMove({ reason: ack.reason, mustTake: ack.mustTake || [] }, card);
+        else if (ack.error === 'frozen') this.toast('The host paused the game');
         else { this.toast('The table changed, try again'); this.resync(); }
       })
       .catch((e) => {
@@ -1071,7 +1073,7 @@ const app = {
     return {
       gameToken: gs.gameToken, phase: gs.phase, roundNum: gs.roundNum, moveSeq: gs.moveSeq || 0,
       currentTurn: gs.currentTurn, tableIds: gs.tableCards.map((c) => c.id), handIds: (this.myHand || []).map((c) => c.id),
-      deckCount: gs.deck ? gs.deck.length : (gs.deckCount || 0),
+      deckCount: gs.deck ? gs.deck.length : (gs.deckCount || 0), debugRev: gs.debugRev || 0,
     };
   },
 
@@ -1081,9 +1083,11 @@ const app = {
     const prev = this._shown;
     const cur = this._snapshot(gs);
     // a hidden tab gets no animation: it would only queue up behind the timers
-    // a change made from the debug panel jumps straight to the new table
-    const anim = Look.prefs.animations && !document.hidden && document.documentElement.dataset.screen === 'game' && !this._debugJump;
-    this._debugJump = false;
+    // a change made from the debug panel jumps straight to the new table, and may show
+    // a tally or a match end again
+    const debugChange = !!prev && prev.debugRev !== cur.debugRev;
+    if (debugChange) { this._ceremonyKey = ''; this._matchKey = ''; }
+    const anim = Look.prefs.animations && !document.hidden && document.documentElement.dataset.screen === 'game' && !debugChange;
     const sameGame = prev && prev.gameToken === cur.gameToken;
 
     const mv = gs.lastMove;
@@ -1166,7 +1170,7 @@ const app = {
     if (gs.phase === 'round_end') { el.textContent = I18N.text('roundEnd'); el.classList.add('text'); Juice.fill(el, 1); return; }
     if (gs.phase === 'finished') { el.textContent = I18N.text('gameOver'); el.classList.add('text'); Juice.fill(el, 1); return; }
     if (gs.phase !== 'playing') { el.textContent = ''; return; }
-    if (this._gameFrozen && this._isBotGame) { el.textContent = I18N.text('paused'); el.classList.add('mult'); Juice.fill(el, 1); return; }
+    if (gs.frozen) { el.textContent = I18N.text('paused'); el.classList.add('mult'); Juice.fill(el, 1); return; }
     if (gs.currentTurn < 0) { el.textContent = I18N.text('dealing'); el.classList.add('text'); Juice.fill(el, 0); return; }
     if (gs.currentTurn === this.activeId()) { el.textContent = I18N.text('yourTurn'); return; }
     const p = gs.players[gs.currentTurn];
@@ -1184,7 +1188,7 @@ const app = {
     const isBot = !!player.isBot;
     const seat = this.snap && this.snap.seats[player.id];
     const away = !!seat && !!seat.away && !seat.takeover;
-    const isControlled = this._isBotGame && this._controllingPlayerId === player.id;   // debug panel: "play as"
+    const isControlled = this.debugCtl() === player.id;   // debug panel: "play as"
     const el = document.createElement('div');
     el.className = `opp t${player.team + 1}${isTurn ? ' active-turn' : ''}${side ? ' side' : ''}${away ? ' away' : ''}${isControlled ? ' controlled' : ''}`;
     el.dataset.player = player.id;
