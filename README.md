@@ -188,8 +188,11 @@ python tests/e2e/e2e.py online http://127.0.0.1:8794
 
 Type `debug()` in the browser console to open the debug panel (type it again, or press Escape, to close it). It opens verbose logging too.
 
-- **Offline bot game:** the room runs in your page, so the panel shows and changes everything, as the first version's host panel did: every hand, the table, the deck, add or remove cards, undo, snapshots, set the turn, scores and chkobbas, move cards between zones, force a deal, a score or a win, bots, teams, "play as" another seat, freeze and spy mode.
-- **Online game:** your browser only ever receives your own hand, and the panel does not change that. It shows your hand, the table, the scores and the state, the room and its seats, the connection, and the last messages to and from the server. Other hands and the deck order are marked "hidden in online games: the server holds it". The host also gets the room's rule switches.
+Every button sends one `debug` message to the room, and the referee (`public/js/room.js`, `DEBUG_OPS`) does the change, so the offline and the online panel are the same code: every hand, the table, the deck, add or remove cards, undo, snapshots, set the turn, scores and chkobbas, move cards between zones, force a deal, a score or a win, bots, teams, "play as" another seat, freeze and spy mode.
+
+- **Offline bot game:** the room runs in your page and opens the panel without a key.
+- **Online game:** without the owner's key the panel shows only what your browser has (your hand, the table, the state, the room and its seats, the connection, the last messages); other hands and the deck are marked "hidden in online games: the server holds it". The owner's key (`debug("key")`, or the key field in the panel) makes that one connection a debug connection: the server checks the key against a SHA-256 hash, refuses wrong keys and limits tries to 5 a minute per room, then sends that connection full snapshots. The key is kept in that browser and sent again after a reconnect. Every other connection still receives only its own hand (a unit test checks this while another seat debugs). Freeze shows "Game paused by the host" to the others; the debug flag is per connection and never saved.
+- **Setup still to do:** the room takes the hash as `debugKeyHash` in its environment, but neither the Worker nor `server.js` passes one yet, so online the key answers "Debug is not set up on this server" for now.
 
 For verbose logging without the panel, add `?debug=1` to the URL, or set `localStorage.chkoba_debug = "true"`.
 
