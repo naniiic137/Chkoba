@@ -372,6 +372,7 @@ const app = {
       }
       this.log('info', 'room created', code);
       await this.enterRoom(code, name, '');
+      if (this.roomCode === code && this.snap) this.toast('Room ready');
     });
   },
 
@@ -666,7 +667,14 @@ const app = {
 
   lobbyAction(act, slot, btn) {
     const type = { addbot: 'addBot', removebot: 'removeBot', swap: 'swap' }[act];
-    if (type) this.busy(btn, () => this.ask(type, { slot }));
+    if (!type) return;
+    this.busy(btn, async () => {
+      const ack = await this.ask(type, { slot });
+      if (!ack || !ack.ok) return;
+      // the first version's confirmations (the snapshot arrives before the ack)
+      if (act === 'addbot') { const s = this.snap && this.snap.seats[slot]; this.toast('Added ' + (s ? s.name : 'a bot')); }
+      else if (act === 'removebot') this.toast('Bot removed');
+    });
   },
 
   startGame() { this.busy(document.getElementById('w-start'), () => this.ask('start')); },
@@ -821,6 +829,7 @@ const app = {
       return;
     }
     const seat = save.room.seats[0];
+    room._log('Game resumed');   // in the move log, as before
     document.getElementById('resume-box').hidden = true;
     this.startLocalRoom(room, save.name || seat.name, seat.token);
     this.log('info', 'bot game resumed:', save.room.gs.scores[0], '-', save.room.gs.scores[1]);
@@ -1897,7 +1906,10 @@ const app = {
   // The match screen closes when the new game's first state arrives.
   rematch() {
     if (!this.isHost) { this.toast('Only the host can start a rematch'); return; }
-    this.busy(document.getElementById('match-again'), () => this.ask('rematch'));
+    this.busy(document.getElementById('match-again'), async () => {
+      const ack = await this.ask('rematch');
+      if (ack && ack.ok) this.toast('Rematch');
+    });
   },
 };
 
