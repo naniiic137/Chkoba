@@ -310,9 +310,9 @@ test('the host moves the tally on; a guest waits; 30 s is the safety net', () =>
   // nobody taps: the room moves on by itself after 30 s
   ({ room, clock, clients } = startedRoom(2, { winScore: 31 }));
   playUntil(clients, clock, () => room.gs.phase === 'round_end');
-  clock.tick(29000);
+  clock.tick(27000);   // playUntil steps the clock 2.5 s at a time: up to that much has gone already
   assert.equal(room.gs.phase, 'round_end');
-  clock.tick(2000);
+  clock.tick(4000);
   assert.equal(room.gs.phase, 'playing');
   // the host drops on the tally: control passes to the guest, whose tap continues
   ({ room, clock, clients } = startedRoom(2, { winScore: 31 }));
