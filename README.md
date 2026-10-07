@@ -129,7 +129,8 @@ chkoba/
 │   ├── game.js               # Client: screens, snapshots, render queue + animation, requests to the room
 │   ├── css/
 │   │   ├── tokens.css        # Design tokens and the three themes (html[data-theme])
-│   │   └── game.css          # Layout (phones included), frames and pills, cards, effects, overlays
+│   │   ├── game.css          # Layout (phones included), frames and pills, cards, effects, overlays
+│   │   └── debug.css         # The debug panel (debug() in the console)
 │   ├── js/
 │   │   ├── rules.js          # Pure rules: legal captures, move check, bot move, round scoring
 │   │   ├── room.js           # The referee: seats, dealing, turns, scoring, bots, timers, snapshots
@@ -154,6 +155,7 @@ chkoba/
 ├── experimentals/            # Standalone UI lab used to design the current look
 └── docs/
     ├── AUDIT.md              # Code and security audit (of the Firebase version)
+    ├── CHANGES-since-netlify.md  # What changed for players since the Netlify version
     └── screenshots/
 ```
 
