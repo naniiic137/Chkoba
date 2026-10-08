@@ -419,6 +419,21 @@ test('a normal seat never receives another hand or the deck while another seat d
   assert.equal(a.send('debug', { op: 'undo' }).ok, true);
   assert.equal(a.send('debug', { op: 'release' }).ok, true);
   assert.equal(a.send('debug', { op: 'load' }).ok, true);
+  // "Bots see all cards": a bot playing the guest's seat knows every hand and the deck;
+  // the guest still receives only its own hand, and the flag itself only goes to the host
+  assert.equal(b.send('debug', { op: 'seeAll', on: true }).error, 'not-debug');
+  assert.equal(a.send('debug', { op: 'seeAll', on: true }).ok, true);
+  assert.equal(a.state.debug.seeAll, true);
+  assert.equal(room.botsSeeAll, true);
+  assert.equal(a.send('debug', { op: 'addBot', seat: 1, level: 'easy' }).ok, true);
+  const seenAll = room.gs.moveSeq;
+  playUntil([a], clock, () => room.gs.moveSeq >= seenAll + 4 || room.gs.phase !== 'playing');
+  assert.ok(room.gs.moveSeq > seenAll, 'the bot played with the switch on');
+  assert.equal(a.send('debug', { op: 'seeAll', on: false }).ok, true);
+  assert.equal(room.botsSeeAll, false);
+  assert.equal(a.state.debug.seeAll, false);
+  assert.equal(a.send('debug', { op: 'removeBot', seat: 1 }).ok, true);
+  assert.equal(room.serialize().botsSeeAll, undefined, 'the switch is not saved');
   // freeze: the guest cannot move and nothing plays by itself
   assert.equal(a.send('debug', { op: 'freeze' }).ok, true);
   assert.equal(b.state.game.frozen, true);

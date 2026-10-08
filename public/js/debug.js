@@ -293,6 +293,7 @@
               <option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select>
             <button class="btn-debug" onclick="app.debugAddBot(${p.id})">+ Bot</button></div>`;
         }).join('')}
+        <button id="debug-see-all" class="btn-debug ${D.seeAll ? 'danger' : ''}" onclick="app.debugToggleSeeAll()">👁 Bots see all cards (${D.seeAll ? 'ON' : 'OFF'})</button>
       </div></div>
 
       <div class="debug-section"><div class="debug-section-title">Team Control</div><div class="debug-controls">
@@ -460,6 +461,7 @@
     debugPossessPlayer(seat) { this.cancelSelection(false); return this._dbgOp('possess', { seat }); },
     debugReleasePossess() { this.cancelSelection(false); return this._dbgOp('release'); },
     debugToggleFreeze() { return this._dbgOp('freeze'); },
+    debugToggleSeeAll() { const D = this._dbg(); return this._dbgOp('seeAll', { on: !(D && D.seeAll) }); },
 
     debugToggleSpy() {
       if (!this._dbg()) { this.toast('Debug is host-only'); return; }

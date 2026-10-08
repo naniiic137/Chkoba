@@ -149,6 +149,7 @@
       this.debugRev = 0;               // bumped by every panel change: clients jump instead of animating
       this.debugCard = 1000;           // ids for cards the panel adds
       this.frozen = false;             // the panel's freeze: no bot, no timer, no move
+      this.botsSeeAll = false;         // the panel's "Bots see all cards": every bot plays hard with every hand and the deck
       this.debugCtl = null;            // a seat played from the panel ("play as"): no bot plays it
       this.debugCtlConn = null;
       this.opts = normalizeOpts(opts);
@@ -428,9 +429,25 @@
       const gs = this.gs;
       const hand = gs.hands[pid];
       if (!hand || !hand.length) return;
-      // legal captures only: a card of equal value on the table is taken before any sum
-      const mv = R.chooseBotMove(hand, gs.tableCards, this._botLevel(pid), gs.forceCapture);
+      // legal captures only: a card of equal value on the table is taken before any sum.
+      // With the debug switch on, every bot plays hard and knows every hand and the deck.
+      const level = this.botsSeeAll ? 'hard' : this._botLevel(pid);
+      const mv = R.chooseBotMove(hand, gs.tableCards, level, gs.forceCapture, undefined, this._botCtx(pid));
       this._play(pid, mv.cardId, mv.captureCardIds);
+    }
+
+    // What the hard bot may know, as a fair player at the table: the piles (every take was
+    // played face up), how many cards each player holds, the deck size, the dealer.
+    // Never another hand or the deck order, unless the debug switch "Bots see all cards" is on.
+    _botCtx(pid) {
+      const gs = this.gs;
+      return {
+        seat: pid, numPlayers: gs.numPlayers, teams: gs.players.map((p) => p.team),
+        handCounts: gs.hands.map((h) => h.length), deckCount: gs.deck.length,
+        captured: gs.capturedTeams, dealer: gs.dealerIndex, lastCaptureTeam: gs.lastCaptureTeam,
+        chkobbas: gs.shkobbaCount,
+        seeAll: this.botsSeeAll ? { hands: gs.hands, deck: gs.deck } : undefined,
+      };
     }
 
     _autoPlay(pid) {
@@ -636,7 +653,7 @@
         hands: gs ? gs.hands.map((h) => h.map(slim)) : [],
         deck: gs ? gs.deck.map(slim) : [],
         captured: gs ? gs.capturedTeams.map((t) => t.length) : [0, 0],
-        history: this.debugHistory.length, saved: !!this.debugSaved, frozen: this.frozen,
+        history: this.debugHistory.length, saved: !!this.debugSaved, frozen: this.frozen, seeAll: this.botsSeeAll,
         ctl: this.debugCtlConn === conn ? this.debugCtl : null,
         bots: this.seats.map((s) => (s ? s.bot || s.takeover || null : null)),
       };
@@ -862,6 +879,11 @@
       this.frozen = !this.frozen;
       if (this.frozen) this._clearTimer('turn'); else this._arm(0);
       return { text: this.frozen ? 'Game FROZEN — all players paused' : 'Game UNFROZEN — resuming' };
+    },
+    // every bot (any level) plays hard knowing every hand and the deck order; read on each bot move
+    seeAll(m) {
+      this.botsSeeAll = typeof m.on === 'boolean' ? m.on : !this.botsSeeAll;
+      return { text: 'Bots see all cards ' + (this.botsSeeAll ? 'ON' : 'OFF') };
     },
   };
 
