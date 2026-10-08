@@ -165,8 +165,13 @@
     depth2: 6, depth4: 6,             // plies searched in each world (2 players: the whole deal)
     seeAllDepth: 12,                  // the see-all search deepens up to this many plies
     nodeBudget: 6000,                 // per move, over all worlds: the search stops deepening past it
+    seeAllNodes: 24000,               // see-all: per deepening step
+    seeAllTotal: Infinity,            // see-all: over all the steps of one move
     foe: 0.9, friend: 0.5,            // how much of the next player's best take counts at a leaf
   };
+  // ctx.budget 'small': the rooms on a server (the Worker, the Node server) keep every
+  // bot move to a few milliseconds; the offline game in the page uses HARD
+  const HARD_SMALL = { ...HARD, samples2: 6, samples4: 5, nodeBudget: 1200, seeAllNodes: 2500, seeAllTotal: 4000 };
   const INSTANT = 25;                 // all ten diamonds: the match is won on the spot
 
   // ---- the value of a position, in team 0's round points minus team 1's ----
@@ -393,6 +398,7 @@
 
   function hardBotMove(hand, tableCards, forceCapture, rand, ctx) {
     const c = ctx || {};
+    const B = c.budget === 'small' ? HARD_SMALL : HARD;
     const n = c.numPlayers === 4 ? 4 : 2;
     const me = Number.isInteger(c.seat) ? c.seat : 0;
     const teams = Array.isArray(c.teams) && c.teams.length === n ? c.teams.map((t) => (t === 1 ? 1 : 0)) : Array.from({ length: n }, (_, i) => i % 2);
@@ -408,7 +414,7 @@
     const G = {
       teams, myTeam: teams[me], sign: teams[me] === 0 ? 1 : -1, force: !!forceCapture,
       dealer: Number.isInteger(c.dealer) ? c.dealer : (me + n - 1) % n, pool: [], poolTypes: [], memo: new Map(), scratch: [0, 0, 0, 0, 0, 0, 0, 0],
-      nodes: 0, budget: HARD.nodeBudget,
+      nodes: 0, budget: B.nodeBudget,
     };
     const last = Number.isInteger(c.lastCaptureTeam) ? c.lastCaptureTeam : -1;
     const root = (hands, deck, deckCount) => ({ hands, table: tableCards, k, haya, chk, last, turn: me, deck, deckCount, over: false, value: 0, dealEnd: false });
@@ -417,16 +423,26 @@
     if (c.seeAll && Array.isArray(c.seeAll.hands) && Array.isArray(c.seeAll.deck)) {
       const hands = Array.from({ length: n }, (_, i) => (i === me ? hand : (c.seeAll.hands[i] || []).slice()));
       const S0 = root(hands, c.seeAll.deck.slice(), c.seeAll.deck.length);
+      // the debug win rate: the best move this often (bestShare), else the worst one
+      const weak = typeof c.bestShare === 'number' && c.bestShare < 1 && rand() >= c.bestShare;
       let best = moves[0];
-      for (let depth = 2; depth <= HARD.seeAllDepth; depth += 2) {
+      let spent = 0;
+      for (let depth = 2; depth <= B.seeAllDepth && spent < B.seeAllTotal; depth += 2) {
         G.nodes = 0;
-        G.budget = HARD.nodeBudget * 4;
+        G.budget = Math.min(B.seeAllNodes, B.seeAllTotal - spent);
         let bestHere = null, alpha = -Infinity;
+        let low = Infinity;
         for (const m of moves) {
+          if (weak) {
+            const v = hardSearch(G, hardPlay(G, S0, me, m.ci, m.combo), depth - 1, -Infinity, Infinity);
+            if (v < low) { low = v; bestHere = m; }
+            continue;
+          }
           const v = hardSearch(G, hardPlay(G, S0, me, m.ci, m.combo), depth - 1, alpha, Infinity);
           if (bestHere === null || v > alpha) { alpha = v; bestHere = m; }
         }
         if (G.nodes > G.budget) break;    // this depth did not finish: keep the last one that did
+        spent += G.nodes;
         best = bestHere;
       }
       return toMove(best);
@@ -446,9 +462,9 @@
     const inHands = handCounts.reduce((s, x, i) => s + (i === me ? 0 : x), 0);
     const deckCount = Number.isInteger(c.deckCount) ? c.deckCount : Math.max(0, unseen.length - inHands);
 
-    const samples = n === 4 ? HARD.samples4 : HARD.samples2;
-    const depth = n === 4 ? HARD.depth4 : HARD.depth2;
-    const perWorld = Math.floor(HARD.nodeBudget / samples);
+    const samples = n === 4 ? B.samples4 : B.samples2;
+    const depth = n === 4 ? B.depth4 : B.depth2;
+    const perWorld = Math.floor(B.nodeBudget / samples);
     const total = new Float64Array(moves.length);
     for (let s = 0; s < samples; s++) {
       const pool = unseen.slice();
@@ -468,6 +484,19 @@
     let bi = 0;
     for (let i = 1; i < moves.length; i++) if (total[i] > total[bi] + 1e-9) bi = i;
     return toMove(moves[bi]);
+  }
+
+  // The debug panel's win rate slider: the share of see-all best moves (the rest are the
+  // worst moves) that makes a bot win about this percentage of matches to 21 against a
+  // normal hard bot, from node tests/bot-strength.js calibrate. [win rate %, best share]
+  const WIN_RATE_CURVE = [[0, 0], [1, 0.5], [9, 0.65], [31, 0.75], [50, 0.8], [75, 0.9], [88, 0.97], [94, 1], [100, 1]];
+  function winRateToBestShare(rate) {
+    const r = Math.max(0, Math.min(100, Number(rate) || 0));
+    for (let i = 1; i < WIN_RATE_CURVE.length; i++) {
+      const [r0, q0] = WIN_RATE_CURVE[i - 1], [r1, q1] = WIN_RATE_CURVE[i];
+      if (r <= r1) return r1 === r0 ? q1 : q0 + (q1 - q0) * (r - r0) / (r1 - r0);
+    }
+    return 1;
   }
 
   // The move made for a player whose turn timer ran out.
@@ -526,6 +555,6 @@
 
   return {
     findCaptureCombinations, matchingIndices, legalCaptures, hasDirectMatch, checkMove,
-    chooseBotMove, autoPlayMove, scoreRound, dealsPerDeck, matchWinner,
+    chooseBotMove, winRateToBestShare, autoPlayMove, scoreRound, dealsPerDeck, matchWinner,
   };
 });

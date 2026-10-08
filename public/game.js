@@ -769,7 +769,7 @@ const app = {
   },
 
   localEnv() {
-    return { debugOpen: true, onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
+    return { debugOpen: true, botSearch: 'full', onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
   },
 
   startLocalRoom(room, name, token) {
