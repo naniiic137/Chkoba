@@ -286,6 +286,8 @@
               <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
               <span class="bot-badge" style="margin-left:0.3rem;">BOT</span>
               <button class="btn-debug danger" onclick="app.debugRemoveBot(${p.id})" style="margin-left:auto;">Remove Bot</button></div>
+            <label class="debug-controls-row" style="align-items:center;gap:0.3rem;font-size:0.68rem;color:var(--text-secondary);">
+              <input type="checkbox" id="debug-see-all-${p.id}" ${D.seeAll && D.seeAll[p.id] ? 'checked' : ''} onchange="app.debugSetSeeAll(${p.id}, this.checked)"> Sees all cards</label>
             ${this.botRateRowHtml(p.id, D.botRates ? D.botRates[p.id] : null)}`;
           }
           return `<div class="debug-controls-row" style="align-items:center;">
@@ -294,7 +296,10 @@
               <option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select>
             <button class="btn-debug" onclick="app.debugAddBot(${p.id})">+ Bot</button></div>`;
         }).join('')}
-        <button id="debug-see-all" class="btn-debug ${D.seeAll ? 'danger' : ''}" onclick="app.debugToggleSeeAll()">👁 Bots see all cards (${D.seeAll ? 'ON' : 'OFF'})</button>
+        <div class="debug-controls-row" style="align-items:center;">
+          <span style="font-size:0.72rem;color:var(--text-secondary);">👁 All bots see all cards</span>
+          <button id="debug-see-all-on" class="btn-debug" onclick="app.debugSeeAllBots(true)" style="margin-left:auto;">On</button>
+          <button id="debug-see-all-off" class="btn-debug" onclick="app.debugSeeAllBots(false)">Off</button></div>
       </div></div>
 
       <div class="debug-section"><div class="debug-section-title">Deal Control (from the next deal)</div><div class="debug-controls">
@@ -473,7 +478,9 @@
     debugPossessPlayer(seat) { this.cancelSelection(false); return this._dbgOp('possess', { seat }); },
     debugReleasePossess() { this.cancelSelection(false); return this._dbgOp('release'); },
     debugToggleFreeze() { return this._dbgOp('freeze'); },
-    debugToggleSeeAll() { const D = this._dbg(); return this._dbgOp('seeAll', { on: !(D && D.seeAll) }); },
+    // "Sees all cards": one bot, or every bot at once
+    debugSetSeeAll(seat, on) { return this._dbgOp('seeAll', { seat, on: !!on }); },
+    debugSeeAllBots(on) { return this._dbgOp('seeAll', { on: !!on }); },
     // a bot's win rate: 0-100, or null for off (the bot plays its own level)
     debugSetBotRate(seat, value) { return this._dbgOp('botRate', { seat, value: value === null ? null : parseInt(value, 10) }); },
     debugSetDealMode(seat, mode) { return this._dbgOp('dealMode', { seat, mode }); },

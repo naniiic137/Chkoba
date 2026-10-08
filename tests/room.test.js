@@ -421,19 +421,25 @@ test('a normal seat never receives another hand or the deck while another seat d
   assert.equal(a.send('debug', { op: 'undo' }).ok, true);
   assert.equal(a.send('debug', { op: 'release' }).ok, true);
   assert.equal(a.send('debug', { op: 'load' }).ok, true);
-  // "Bots see all cards": a bot playing the guest's seat knows every hand and the deck;
-  // the guest still receives only its own hand, and the flag itself only goes to the host
-  assert.equal(b.send('debug', { op: 'seeAll', on: true }).error, 'not-debug');
-  assert.equal(a.send('debug', { op: 'seeAll', on: true }).ok, true);
-  assert.equal(a.state.debug.seeAll, true);
-  assert.equal(room.botsSeeAll, true);
+  // "Sees all cards", per bot: the bot playing the guest's seat knows every hand and the
+  // deck; the guest still receives only its own hand, and the setting only goes to the host
+  assert.equal(b.send('debug', { op: 'seeAll', seat: 1, on: true }).error, 'not-debug');
   assert.equal(a.send('debug', { op: 'addBot', seat: 1, level: 'easy' }).ok, true);
+  assert.equal(a.send('debug', { op: 'seeAll', seat: 1, on: true }).ok, true);
+  assert.deepEqual(a.state.debug.seeAll, [false, true]);
+  assert.equal(room._seesAll(1), true);
+  assert.equal(room._seesAll(0), false);
+  // "All bots": every bot seat at once, the host's own seat never
+  assert.equal(a.send('debug', { op: 'seeAll', on: false }).ok, true);
+  assert.deepEqual(a.state.debug.seeAll, [false, false]);
+  assert.equal(a.send('debug', { op: 'seeAll', on: true }).ok, true);
+  assert.deepEqual(a.state.debug.seeAll, [false, true]);
   const seenAll = room.gs.moveSeq;
   playUntil([a], clock, () => room.gs.moveSeq >= seenAll + 4 || room.gs.phase !== 'playing');
   assert.ok(room.gs.moveSeq > seenAll, 'the bot played with the switch on');
-  assert.equal(a.send('debug', { op: 'seeAll', on: false }).ok, true);
-  assert.equal(room.botsSeeAll, false);
-  assert.equal(a.state.debug.seeAll, false);
+  assert.equal(a.send('debug', { op: 'seeAll', seat: 1, on: false }).ok, true);
+  assert.equal(room._seesAll(1), false);
+  assert.deepEqual(a.state.debug.seeAll, [false, false]);
   // the win rate slider on the bot, and the deal control: the host Good, the guest's seat Bad
   assert.equal(b.send('debug', { op: 'botRate', seat: 1, value: 100 }).error, 'not-debug');
   assert.equal(b.send('debug', { op: 'dealMode', seat: 1, mode: 'good' }).error, 'not-debug');
@@ -460,7 +466,7 @@ test('a normal seat never receives another hand or the deck while another seat d
   const saved = JSON.stringify(room.serialize());
   assert.ok(!/botRates|dealModes/.test(saved), 'the debug settings are not saved');
   assert.equal(a.send('debug', { op: 'removeBot', seat: 1 }).ok, true);
-  assert.equal(room.serialize().botsSeeAll, undefined, 'the switch is not saved');
+  assert.ok(!/seeAll/.test(JSON.stringify(room.serialize())), 'the switch is not saved');
   // freeze: the guest cannot move and nothing plays by itself
   assert.equal(a.send('debug', { op: 'freeze' }).ok, true);
   assert.equal(b.state.game.frozen, true);
@@ -488,4 +494,25 @@ test('the host leaving turns its debug off: the game unfreezes and the seat it p
   assert.equal(room.frozen, false);
   assert.equal(room.debugCtl, null);
   assert.equal(b.state.game.frozen, false);
+});
+
+test("the main menu's win rate (offline) applies to the opponent bots only, never the partner", () => {
+  const { room, clock } = makeRoom({ players: 4, speed: 'fast' }, { botWinRate: 30 });
+  const me = client(room);
+  me.hello('Player');
+  for (const slot of [1, 2, 3]) assert.equal(me.send('addBot', { slot, level: 'medium' }).ok, true);
+  assert.equal(me.send('start').ok, true);
+  // seats 0+2 against 1+3: the partner (seat 2) plays its own level
+  assert.deepEqual([0, 1, 2, 3].map((i) => room._botRate(i)), [null, 30, null, 30]);
+  const ctx = room._botCtx(1);
+  assert.ok(ctx.seeAll && ctx.bestShare === R.winRateToBestShare(30));
+  assert.equal(room._botCtx(2).seeAll, undefined);
+  // the debug panel's own setting wins over the menu's; Off means the bot's own level
+  room.botRates[3] = null;
+  assert.equal(room._botRate(3), null);
+  assert.ok(!/bestShare|botRate|menuRate|seeAll/.test(JSON.stringify(me.state)), 'nothing about it in the snapshot');
+  assert.ok(playUntil([me], clock, () => room.gs.moveSeq >= 12));
+  // without it, as before
+  const plain = makeRoom({ players: 2 }).room;
+  assert.equal(plain.menuRate, null);
 });

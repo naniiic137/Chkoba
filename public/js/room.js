@@ -183,7 +183,8 @@
     // opts: room options (see normalizeOpts) plus code.
     // env:  { clock, holdMs, onChange(room),
     //         onClose(room), log(level, ...args),
-    //         debugOpen (the offline game: the debug panel is open to its player) }
+    //         debugOpen (the offline game: the debug panel is open to its player),
+    //         botWinRate (the offline game: the main menu's win rate for the opponent bots, 0-100) }
     constructor(opts, env) {
       env = env || {};
       this.code = (opts && opts.code) || '';
@@ -201,8 +202,10 @@
       this.debugRev = 0;               // bumped by every panel change: clients jump instead of animating
       this.debugCard = 1000;           // ids for cards the panel adds
       this.frozen = false;             // the panel's freeze: no bot, no timer, no move
-      this.botsSeeAll = false;         // the panel's "Bots see all cards": every bot plays hard with every hand and the deck
-      this.botRates = [];              // the panel's win rate per bot seat (0-100), null/undefined: off, the bot plays its level
+      this.seeAllSeats = [];           // the panel's "Sees all cards" per bot seat: that bot plays hard with every hand and the deck
+      this.botRates = [];              // the panel's win rate per bot seat (0-100), null: off; unset: the menu's rate below
+      // the main menu's win rate (offline only): the opponent bots, never the player's partner
+      this.menuRate = Number.isInteger(env.botWinRate) && env.botWinRate >= 0 && env.botWinRate <= 100 ? env.botWinRate : null;
       this.dealModes = [];             // the panel's deal control per seat: 'good', 'bad', or normal (a fair deal)
       // how hard a bot may think: 'small' on a server (the Worker, the Node server), 'full' offline in the page
       this.botSearch = env.botSearch === 'full' ? 'full' : 'small';
@@ -490,7 +493,7 @@
       // With the debug switch on, every bot plays hard and knows every hand and the deck.
       // With a win rate set for this seat, it mixes the see-all best move with weak ones.
       const rated = this._botRate(pid) !== null;
-      const level = this.botsSeeAll || rated ? 'hard' : this._botLevel(pid);
+      const level = this._seesAll(pid) || rated ? 'hard' : this._botLevel(pid);
       const mv = R.chooseBotMove(hand, gs.tableCards, level, gs.forceCapture, undefined, this._botCtx(pid));
       this._play(pid, mv.cardId, mv.captureCardIds);
     }
@@ -498,7 +501,16 @@
     // What the hard bot may know, as a fair player at the table: the piles (every take was
     // played face up), how many cards each player holds, the deck size, the dealer.
     // Never another hand or the deck order, unless the debug switch "Bots see all cards" is on.
-    _botRate(pid) { const r = this.botRates[pid]; return Number.isInteger(r) ? r : null; }
+    // the debug panel's rate for this seat; else the menu's, for a bot against the humans
+    _botRate(pid) {
+      const r = this.botRates[pid];
+      if (Number.isInteger(r)) return r;
+      if (r === null || this.menuRate === null || !this.gs) return null;
+      const team = this.gs.players[pid].team;
+      const humans = this.seats.map((x, i) => (x && x.human ? this.gs.players[i].team : -1)).filter((t) => t >= 0);
+      return humans.length && !humans.includes(team) ? this.menuRate : null;
+    }
+    _seesAll(pid) { return !!this.seeAllSeats[pid]; }
     _botCtx(pid) {
       const gs = this.gs;
       const rate = this._botRate(pid);
@@ -509,7 +521,7 @@
         handCounts: gs.hands.map((h) => h.length), deckCount: gs.deck.length,
         captured: gs.capturedTeams, dealer: gs.dealerIndex, lastCaptureTeam: gs.lastCaptureTeam,
         chkobbas: gs.shkobbaCount,
-        seeAll: this.botsSeeAll || rate !== null ? { hands: gs.hands, deck: gs.deck } : undefined,
+        seeAll: this._seesAll(pid) || rate !== null ? { hands: gs.hands, deck: gs.deck } : undefined,
       };
     }
 
@@ -716,7 +728,7 @@
         hands: gs ? gs.hands.map((h) => h.map(slim)) : [],
         deck: gs ? gs.deck.map(slim) : [],
         captured: gs ? gs.capturedTeams.map((t) => t.length) : [0, 0],
-        history: this.debugHistory.length, saved: !!this.debugSaved, frozen: this.frozen, seeAll: this.botsSeeAll,
+        history: this.debugHistory.length, saved: !!this.debugSaved, frozen: this.frozen, seeAll: this.seats.map((x, i) => this._seesAll(i)),
         botRates: this.seats.map((s, i) => this._botRate(i)), dealModes: this.seats.map((s, i) => this.dealModes[i] || 'normal'),
         ctl: this.debugCtlConn === conn ? this.debugCtl : null,
         bots: this.seats.map((s) => (s ? s.bot || s.takeover || null : null)),
@@ -944,10 +956,17 @@
       if (this.frozen) this._clearTimer('turn'); else this._arm(0);
       return { text: this.frozen ? 'Game FROZEN — all players paused' : 'Game UNFROZEN — resuming' };
     },
-    // every bot (any level) plays hard knowing every hand and the deck order; read on each bot move
+    // "Sees all cards" for one bot seat (m.seat), or for every bot seat (no seat): that bot
+    // plays hard knowing every hand and the deck order; read on each of its moves
     seeAll(m) {
-      this.botsSeeAll = typeof m.on === 'boolean' ? m.on : !this.botsSeeAll;
-      return { text: 'Bots see all cards ' + (this.botsSeeAll ? 'ON' : 'OFF') };
+      if (m.seat === undefined || m.seat === null) {
+        const on = !!m.on;
+        this.seeAllSeats = on ? this.seats.map((x, i) => this._isBotSeat(i)) : [];
+        return { text: 'All bots see all cards ' + (on ? 'ON' : 'OFF') };
+      }
+      if (!seatOk(this, m.seat)) return { error: 'bad-slot' };
+      this.seeAllSeats[m.seat] = typeof m.on === 'boolean' ? m.on : !this.seeAllSeats[m.seat];
+      return { text: 'P' + m.seat + ' sees all cards ' + (this.seeAllSeats[m.seat] ? 'ON' : 'OFF') };
     },
     // one bot's win rate, 0-100, or null for off (it plays its own level again)
     botRate(m) {
