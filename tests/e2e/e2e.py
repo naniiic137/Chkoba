@@ -281,7 +281,17 @@ def debug_panel(browser, base):
     assert 'CONTROLLING' in page.text_content('#possess-banner').upper()
     page.click('#debug-body button:has-text("Release")')
     page.wait_for_function("() => app.debugCtl() === null")
+    # "Bots see all cards": the switch is there, and the bot still plays legal moves with it on
+    assert 'Bots see all cards (OFF)' in page.text_content('#debug-see-all')
+    page.click('#debug-see-all')
+    page.wait_for_function("() => app.snap.debug.seeAll === true && app.localRoom.botsSeeAll === true")
+    assert 'Bots see all cards (ON)' in page.text_content('#debug-see-all')
     page.evaluate("() => app.minimizeDebug()")   # the panel sits over the hand on a phone
+    seq0 = page.evaluate("() => app.localRoom.gs.moveSeq")
+    # turns alternate with the bot: two moves include one of the bot's, checked by the room
+    play_until([page], lambda: page.evaluate(f"() => app.gameState.moveSeq >= {seq0 + 2}"), what='a bot move with the switch on')
+    page.evaluate("() => app.debugToggleSeeAll()")
+    page.wait_for_function("() => app.snap.debug.seeAll === false && app.localRoom.botsSeeAll === false")
     # a move, then undo it
     play_until([page], lambda: page.evaluate("() => app.gameState.moveSeq >= 2"), what='two moves')
     page.wait_for_function("() => !app._animating")
@@ -292,7 +302,7 @@ def debug_panel(browser, base):
     page.wait_for_function(f"() => app.gameState.moveSeq === {seq - 1}")
     page.evaluate("() => debug()")
     page.wait_for_selector('#debug-panel.hidden', state='attached')
-    print('  offline: debug() shows every hand and the deck; spy, play as and undo work')
+    print('  offline: debug() shows every hand and the deck; spy, play as, bots see all cards and undo work')
     ctx.close()
 
     # online, a guest: only this seat's hand; the rest is marked hidden
