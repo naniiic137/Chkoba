@@ -292,6 +292,31 @@ def debug_panel(browser, base):
     play_until([page], lambda: page.evaluate(f"() => app.gameState.moveSeq >= {seq0 + 2}"), what='a bot move with the switch on')
     page.evaluate("() => app.debugToggleSeeAll()")
     page.wait_for_function("() => app.snap.debug.seeAll === false && app.localRoom.botsSeeAll === false")
+    # the bot's win rate slider and the per-seat deal control: present, and play stays legal with them set
+    page.evaluate("() => app.restoreDebug()")
+    page.click('.debug-tab[data-tab="controls"]')
+    for sel in ('#debug-rate-1', '#debug-deal-0', '#debug-deal-1', '#debug-deal-normal'):
+        assert page.locator(sel).count() == 1, sel
+    page.locator('#debug-rate-1').fill('100')   # a range input: fill sets it and fires change
+    page.wait_for_function("() => app.snap.debug.botRates[1] === 100")
+    page.select_option('#debug-deal-0', 'good')
+    page.wait_for_function("() => app.snap.debug.dealModes[0] === 'good'")
+    page.select_option('#debug-deal-1', 'bad')
+    page.wait_for_function("() => app.snap.debug.dealModes[1] === 'bad'")
+    page.evaluate("() => app.minimizeDebug()")
+    deck0 = page.evaluate("() => app.localRoom.gs.deck.length")
+    # on to the next deal (stacked), with the slider bot playing its moves
+    play_until([page], lambda: page.evaluate(f"() => app.localRoom.gs.deck.length < {deck0} && app.gameState.phase === 'playing' && app.myHand.length === 3"), what='a stacked deal')
+    hands = page.evaluate("() => app.localRoom.gs.hands.map((h) => h.length)")
+    assert hands == [3, 3], hands
+    seq1 = page.evaluate("() => app.localRoom.gs.moveSeq")
+    play_until([page], lambda: page.evaluate(f"() => app.gameState.moveSeq >= {seq1 + 2} || app.gameState.phase !== 'playing'"), what='a bot move on the stacked deal')
+    page.evaluate("() => app.restoreDebug()")
+    page.click('#debug-deal-normal')
+    page.wait_for_function("() => app.snap.debug.dealModes.every((m) => m === 'normal')")
+    page.click('#debug-body button:has-text("Off")')
+    page.wait_for_function("() => app.snap.debug.botRates[1] === null")
+    page.evaluate("() => app.minimizeDebug()")
     # a move, then undo it
     play_until([page], lambda: page.evaluate("() => app.gameState.moveSeq >= 2"), what='two moves')
     page.wait_for_function("() => !app._animating")
@@ -302,7 +327,7 @@ def debug_panel(browser, base):
     page.wait_for_function(f"() => app.gameState.moveSeq === {seq - 1}")
     page.evaluate("() => debug()")
     page.wait_for_selector('#debug-panel.hidden', state='attached')
-    print('  offline: debug() shows every hand and the deck; spy, play as, bots see all cards and undo work')
+    print('  offline: debug() shows every hand and the deck; spy, play as, bots see all cards, win rate, deal control and undo work')
     ctx.close()
 
     # online, a guest: only this seat's hand; the rest is marked hidden
