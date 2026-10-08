@@ -85,7 +85,7 @@ const app = {
   _ceremonyDone: false,      // the tally has finished counting (its continue line is up)
   rulesPage: 0,
   // room defaults chosen on the Options screen (persisted)
-  opts: { players: 2, winScore: 21, timer: 30, bot: 'medium', speed: 'normal', forceCapture: true, captureAssist: false },
+  opts: { players: 2, winScore: 21, timer: 30, bot: 'medium', speed: 'normal', forceCapture: true, captureAssist: false, botWinRate: null },
 
   // ========== LOGGING ==========
   // Leveled logger. error/warn always print; info/debug print only in verbose mode
@@ -192,6 +192,14 @@ const app = {
     $('m-options').addEventListener('click', () => this.showOptions());
     $('m-resume').addEventListener('click', () => this.resumeBotGame());
     $('m-discard').addEventListener('click', () => { this.clearBotSave(); this.renderResumeOffer(); });
+    // the bot's win rate, under Play vs bot: far left is Off (the bot plays its level)
+    $('m-rate').addEventListener('input', () => {
+      const v = parseInt($('m-rate').value, 10);
+      this.opts.botWinRate = v >= 0 ? v : null;
+      this._saveOpts();
+      this.renderMenuRate();
+    });
+    this.renderMenuRate();
     $('left-wait').addEventListener('click', () => this.waitForPlayer());
     $('left-claim').addEventListener('click', (e) => this.awayDecision('end', e.currentTarget));
     $('left-bot').addEventListener('click', (e) => this.awayDecision('bot', e.currentTarget));
@@ -226,7 +234,7 @@ const app = {
     // options: personal
     this.bindSeg($('o-shake'), () => Look.prefs.shake, (v) => Look.setPref('shake', v));
     this.bindSeg($('o-anim'), () => Look.prefs.animations, (v) => Look.setPref('animations', v));
-    this.bindSeg($('o-labels'), () => Look.prefs.labels, (v) => { Look.setPref('labels', v); this.renderMenuCards(); if (this.gameState) this.renderGame(); });
+    this.bindSeg($('o-labels'), () => Look.prefs.labels, (v) => { Look.setPref('labels', v); this.renderMenuCards(); this.renderMenuRate(); if (this.gameState) this.renderGame(); });
     this.bindSeg($('o-sound'), () => Look.prefs.sound, (v) => { Look.setPref('sound', v); if (v) this.playSound('click'); });
     // game hud + actions
     $('hud-gear').addEventListener('click', () => this.toggleMenu());
@@ -283,6 +291,15 @@ const app = {
   // stores it as the default for the next room. In a running room only the host's
   // in-game menu changes it, because it has to reach every player.
   setLookLocal(partial) { Look.setLook(partial, true); this.renderMenuCards(); if (this.gameState) this.renderGame(); },
+
+  renderMenuRate() {
+    const v = this.opts.botWinRate, on = Number.isInteger(v);
+    document.getElementById('m-rate').value = on ? v : -5;
+    document.getElementById('m-rate-label').innerHTML = I18N.html('winRate');
+    const val = document.getElementById('m-rate-val');
+    val.textContent = on ? v + '%' : I18N.text('off');
+    val.classList.toggle('off', !on);
+  },
 
   renderMenuCards() {
     const box = document.getElementById('hero-cards'); box.innerHTML = '';
@@ -769,7 +786,9 @@ const app = {
   },
 
   localEnv() {
-    return { debugOpen: true, botSearch: 'full', onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
+    // the menu's win rate goes to the opponent bots of this offline game only (room.js _botRate)
+    const r = this.opts.botWinRate;
+    return { debugOpen: true, botSearch: 'full', botWinRate: Number.isInteger(r) ? r : undefined, onChange: (room) => this.saveBotGame(room), log: (level, ...a) => this.log(level, '[room]', ...a) };
   },
 
   startLocalRoom(room, name, token) {
@@ -1850,7 +1869,7 @@ const app = {
       case 'suits': this.changeLook({ suits: v }); break;
       case 'shake': Look.setPref('shake', v); break;
       case 'anim': Look.setPref('animations', v); break;
-      case 'labels': Look.setPref('labels', v); this.renderGame(); break;
+      case 'labels': Look.setPref('labels', v); this.renderMenuRate(); this.renderGame(); break;
       case 'sound': Look.setPref('sound', v); if (v) this.playSound('click'); break;
     }
     this.renderMenuContent();

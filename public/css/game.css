@@ -475,6 +475,13 @@ html.reduce .fx-slam .word span { animation: none; }
    settings groups, move log, guest notes)
    ========================================================================== */
 .menu-stack .input { text-align: center; }
+/* the bot's win rate, under Play vs bot: Off (far left), then 0-100% */
+.bot-rate { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 12px; border-radius: var(--radius-sm); background: rgba(0,0,0,.32); border: 2px solid var(--panel-rim); font-size: 14px; }
+.bot-rate label { white-space: nowrap; color: var(--text-mut); }
+.bot-rate label .term small { display: block; font-size: 10px; }
+.bot-rate input[type=range] { flex: 1; min-width: 0; height: 32px; accent-color: var(--gold); cursor: pointer; }
+.bot-rate-val { min-width: 3.2em; text-align: right; font-family: var(--font-display); color: var(--gold); }
+.bot-rate-val.off { color: var(--text-mut); }
 .menu-foot a { color: inherit; }
 
 .slot .btns { margin-left: auto; display: flex; gap: 6px; }

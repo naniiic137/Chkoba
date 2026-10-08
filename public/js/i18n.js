@@ -28,6 +28,8 @@
     gameOver:{ ar: 'انتهت اللعبة',  latin: 'GAME OVER',en: 'Game over' },
     waiting: { ar: 'انتظار',        latin: 'WAITING',  en: 'Waiting' },
     paused:  { ar: 'توقّف',         latin: 'PAUSED',   en: 'Paused' },
+    winRate: { ar: 'نسبة ربح البوت', latin: 'BOT WIN RATE', en: 'Bot win rate' },
+    off:     { ar: 'مطفأ',          latin: 'OFF',      en: 'Off' },
   };
 
   // Rule copy for the info panel and the rules carousel. Kept in one place so the
