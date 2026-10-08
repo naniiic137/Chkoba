@@ -34,10 +34,19 @@
         </div>
         <input type="text" id="menu-name" class="input" placeholder="Your name" aria-label="Your name (optional against the bot)" maxlength="20" autocomplete="nickname">
         <button class="pill big gold" id="m-bot">Play vs bot</button>
-        <div class="bot-rate" id="m-rate-box">
-          <label for="m-rate" id="m-rate-label">Bot win rate</label>
-          <input type="range" id="m-rate" min="-5" max="100" step="5" value="-5" aria-describedby="m-rate-val">
-          <span id="m-rate-val" class="bot-rate-val">Off</span>
+        <div class="bot-rate is-off" id="m-rate-box">
+          <div class="bot-rate-head">
+            <label for="m-rate" id="m-rate-label">Bot win rate</label>
+            <span id="m-rate-val" class="bot-rate-val off">Off</span>
+          </div>
+          <div class="bot-rate-track">
+            <span id="m-rate-off" class="bot-rate-end" aria-hidden="true">Off</span>
+            <div class="bot-rate-rail">
+              <input type="range" id="m-rate" class="gold-range" min="-5" max="100" step="5" value="-5" aria-describedby="m-rate-val">
+              <div class="bot-rate-ticks" aria-hidden="true"><i style="--at:.0476"></i><i style="--at:.2857"></i><i style="--at:.5238"></i><i style="--at:.7619"></i><i style="--at:1"></i></div>
+            </div>
+            <span class="bot-rate-end" aria-hidden="true">100%</span>
+          </div>
         </div>
         <button class="pill big chip" id="m-create">Create game</button>
         <button class="pill big green" id="m-join">Join game</button>

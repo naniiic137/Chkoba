@@ -299,6 +299,11 @@ const app = {
     const val = document.getElementById('m-rate-val');
     val.textContent = on ? v + '%' : I18N.text('off');
     val.classList.toggle('off', !on);
+    // the look only: the gold part of the track, the muted Off state
+    const box = document.getElementById('m-rate-box');
+    box.style.setProperty('--fill', on ? ((v + 5) / 105).toFixed(4) : 0);
+    box.classList.toggle('is-off', !on);
+    document.getElementById('m-rate-off').textContent = I18N.text('off');
   },
 
   renderMenuCards() {
