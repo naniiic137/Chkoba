@@ -12,7 +12,9 @@ Moves are chosen with the page's own rules module and made by clicking the cards
 the Capture / Place buttons, like a player would.
 """
 import json
+import os
 import sys
+import tempfile
 import time
 
 from playwright.sync_api import sync_playwright
@@ -254,6 +256,39 @@ def away_flow(browser, base):
     ca.close()
 
 
+def menu_rate(browser, base):
+    """The bot's win rate slider under Play vs bot: Off by default, remembered with the
+    room options, laid out inside a phone-width screen, and given to the opponent bot."""
+    ctx, page = new_player(browser, base, 'RATE', block_ws=True)
+    assert page.locator('#m-bot + #m-rate-box #m-rate').count() == 1, 'the slider sits right under Play vs bot'
+    assert page.inner_text('#m-rate-val').strip().lower() == 'off'
+    page.locator('#m-rate').fill('40')
+    page.wait_for_function("() => document.getElementById('m-rate-val').textContent === '40%'")
+    assert page.evaluate("() => JSON.parse(localStorage.getItem('chkobba_room_opts')).botWinRate") == 40
+    box, vw = page.locator('#m-rate-box').bounding_box(), page.viewport_size['width']
+    assert box['x'] >= 0 and box['x'] + box['width'] <= vw, (box, vw)
+    assert box['height'] >= 44, box
+    assert page.evaluate("() => document.documentElement.scrollWidth <= window.innerWidth"), 'no sideways scroll'
+    shot = os.path.join(tempfile.gettempdir(), 'chkobba-menu-win-rate.png')
+    page.screenshot(path=shot)
+    # remembered after a reload
+    page.reload()
+    page.wait_for_function("() => document.getElementById('m-rate-val').textContent === '40%'")
+    # the offline game: the bot (the opponent) gets it, and still plays legal moves
+    page.click('#m-bot')
+    wait_screen(page, 'game')
+    page.wait_for_function("() => app.localRoom && app.localRoom.gs && app.localRoom._botRate(1) === 40 && app.localRoom._botRate(0) === null")
+    play_until([page], lambda: page.evaluate("() => app.gameState.moveSeq >= 4"), what='four moves with the win rate set')
+    # back to Off: the difficulty plays exactly as before
+    page.goto(base)
+    page.wait_for_function('window.app && document.querySelector("#screen-menu.active")')
+    page.locator('#m-rate').fill('-5')
+    page.wait_for_function("() => JSON.parse(localStorage.getItem('chkobba_room_opts')).botWinRate === null")
+    assert page.inner_text('#m-rate-val').strip().lower() == 'off'
+    print(f'  menu: the win rate slider under Play vs bot, remembered, phone width ok ({shot}), the bot played with it')
+    ctx.close()
+
+
 def debug_panel(browser, base):
     """debug() in the console opens the debug panel: everything offline; online everything
     for the host, this seat only for a guest."""
@@ -281,17 +316,22 @@ def debug_panel(browser, base):
     assert 'CONTROLLING' in page.text_content('#possess-banner').upper()
     page.click('#debug-body button:has-text("Release")')
     page.wait_for_function("() => app.debugCtl() === null")
-    # "Bots see all cards": the switch is there, and the bot still plays legal moves with it on
-    assert 'Bots see all cards (OFF)' in page.text_content('#debug-see-all')
-    page.click('#debug-see-all')
-    page.wait_for_function("() => app.snap.debug.seeAll === true && app.localRoom.botsSeeAll === true")
-    assert 'Bots see all cards (ON)' in page.text_content('#debug-see-all')
+    # "Sees all cards" per bot (and "All bots"): there, and the bot still plays legal moves with it on
+    assert page.locator('#debug-see-all-on').count() == 1 and page.locator('#debug-see-all-off').count() == 1
+    assert not page.is_checked('#debug-see-all-1')
+    page.check('#debug-see-all-1')
+    page.wait_for_function("() => app.snap.debug.seeAll[1] === true && app.localRoom._seesAll(1)")
+    page.click('#debug-see-all-off')
+    page.wait_for_function("() => app.snap.debug.seeAll[1] === false")
+    page.click('#debug-see-all-on')
+    page.wait_for_function("() => app.snap.debug.seeAll[1] === true && app.snap.debug.seeAll[0] === false")
+    assert page.is_checked('#debug-see-all-1')
     page.evaluate("() => app.minimizeDebug()")   # the panel sits over the hand on a phone
     seq0 = page.evaluate("() => app.localRoom.gs.moveSeq")
     # turns alternate with the bot: two moves include one of the bot's, checked by the room
     play_until([page], lambda: page.evaluate(f"() => app.gameState.moveSeq >= {seq0 + 2}"), what='a bot move with the switch on')
-    page.evaluate("() => app.debugToggleSeeAll()")
-    page.wait_for_function("() => app.snap.debug.seeAll === false && app.localRoom.botsSeeAll === false")
+    page.evaluate("() => app.debugSetSeeAll(1, false)")
+    page.wait_for_function("() => app.snap.debug.seeAll[1] === false && !app.localRoom._seesAll(1)")
     # the bot's win rate slider and the per-seat deal control: present, and play stays legal with them set
     page.evaluate("() => app.restoreDebug()")
     page.click('.debug-tab[data-tab="controls"]')
@@ -382,8 +422,10 @@ def main():
                 two_player_round(browser, base, reload_check=True)
                 four_player_teams(browser, base)
                 offline_bot(browser, base)
+                menu_rate(browser, base)
                 debug_panel(browser, base)
             elif mode == 'debug':
+                menu_rate(browser, base)
                 debug_panel(browser, base)
             elif mode == 'online':
                 two_player_round(browser, base)
