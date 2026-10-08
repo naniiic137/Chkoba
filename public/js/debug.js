@@ -16,6 +16,7 @@
   const dim = (text) => `<div style="color:var(--text-dim);padding:1rem;">${text}</div>`;
   const note = (text) => `<div class="debug-hidden-note">${escapeHtml(text)}</div>`;
   const cardTxt = (c) => `${c.display}${SUIT_SYMBOLS[c.suit] || ''}`;
+  const chip = (c) => `${c.display}<span class="suit ${c.suit}">${SUIT_SYMBOLS[c.suit] || ''}</span>`;
   const val = (id, d) => { const el = document.getElementById(id); return el ? el.value : d; };
 
   Object.assign(app, {
@@ -146,19 +147,19 @@
         if (hand) {
           html += hand.length
             ? hand.map((c, ci) => D
-              ? `<span class="debug-card removable" onclick="app.debugRemoveCardFromPlayer(${i}, ${ci})" title="Click to remove">${cardTxt(c)}</span>`
-              : `<span class="debug-card">${cardTxt(c)}</span>`).join('')
-            : '<span style="color:var(--text-dim);font-size:0.72rem;">empty</span>';
+              ? `<span class="debug-card removable" onclick="app.debugRemoveCardFromPlayer(${i}, ${ci})" title="Click to remove">${chip(c)}</span>`
+              : `<span class="debug-card">${chip(c)}</span>`).join('')
+            : '<span style="color:var(--text-dim);">empty</span>';
         } else {
           const played = gs.cardsPlayedThisRound ? (gs.cardsPlayedThisRound[i] || 0) : 0;
           const n = gs.phase === 'playing' ? Math.max(0, 3 - played) : 0;
-          html += `<span style="font-size:0.72rem;color:var(--text-secondary);">${n} card${n === 1 ? '' : 's'}</span> ${note(HIDDEN)}`;
+          html += `<span style="color:var(--text-secondary);">${n} card${n === 1 ? '' : 's'}</span> ${note(HIDDEN)}`;
         }
         html += '</div>';
         if (D) {
           html += `<div class="debug-controls-row" style="margin-top:0.35rem; display:flex; gap:0.3rem;">
-            <select id="debug-card-select-${i}" class="debug-select" style="font-size:0.68rem;padding:0.2rem;max-width:130px;">${this.getCardOptionsHtml()}</select>
-            <button class="btn-debug" onclick="app.debugAddCardToPlayer(${i})" style="font-size:0.68rem;padding:0.2rem 0.4rem;">+ Add</button></div>`;
+            <select id="debug-card-select-${i}" class="debug-select" style="max-width:130px;">${this.getCardOptionsHtml()}</select>
+            <button class="btn-debug" onclick="app.debugAddCardToPlayer(${i})">+ Add</button></div>`;
         }
         html += '</div>';
       }
@@ -171,9 +172,9 @@
       const cards = gs.tableCards || [];
       const tableHtml = cards.length
         ? cards.map((c, i) => D
-          ? `<span class="debug-card removable" onclick="app.debugRemoveTableCard(${i})" title="Click to remove">${cardTxt(c)}</span>`
-          : `<span class="debug-card">${cardTxt(c)}</span>`).join('')
-        : '<span style="color:var(--text-dim);font-size:0.72rem;">Table is empty</span>';
+          ? `<span class="debug-card removable" onclick="app.debugRemoveTableCard(${i})" title="Click to remove">${chip(c)}</span>`
+          : `<span class="debug-card">${chip(c)}</span>`).join('')
+        : '<span style="color:var(--text-dim);">Table is empty</span>';
       return `<div class="debug-section">
         <div class="debug-section-title">Table Cards${D ? ' (click to remove)' : ''}</div>
         <div>${tableHtml}</div>
@@ -192,8 +193,8 @@
       }
       const deck = D.deck || [];
       const top20 = deck.slice(-20).reverse();
-      const deckHtml = top20.length ? top20.map((c) => `<span class="debug-card">${cardTxt(c)}</span>`).join('')
-        : '<span style="color:var(--text-dim);font-size:0.72rem;">Deck is empty</span>';
+      const deckHtml = top20.length ? top20.map((c) => `<span class="debug-card">${chip(c)}</span>`).join('')
+        : '<span style="color:var(--text-dim);">Deck is empty</span>';
       return `<div class="debug-section">
         <div class="debug-section-title">Deck (top ${Math.min(20, deck.length)} of ${deck.length})</div>
         <div>${deckHtml}</div>
@@ -209,7 +210,7 @@
       const cap = (t) => gs.capturedCounts ? gs.capturedCounts[t] : 0;
       const ctl = this.debugCtl();
       return `<div class="debug-section"><div class="debug-section-title">State Info</div>
-        <div style="font-size:0.7rem;color:var(--text-secondary);line-height:1.6;font-family:monospace;">
+        <div style="color:var(--text-secondary);line-height:1.6;font-family:monospace;">
           <div>Phase: ${gs.phase} | Turn: P${gs.currentTurn} | Dealer: P${gs.dealerIndex}</div>
           <div>Deck: ${gs.deckCount || 0} | Table: ${(gs.tableCards || []).length} | Round: ${gs.roundNum + 1}/${gs.totalRounds}</div>
           <div>Captured: T1=${cap(0)} T2=${cap(1)} | Last Cap: T${gs.lastCaptureTeam + 1}</div>
@@ -247,15 +248,15 @@
 
       <div class="debug-section"><div class="debug-section-title">Score & Chkobba</div><div class="debug-controls">
         <div class="debug-controls-row">
-          <label style="font-size:0.72rem;color:var(--team1);min-width:30px;">T1:</label>
+          <label style="color:var(--team1);min-width:30px;">T1:</label>
           <input type="number" id="debug-score-t1" class="debug-select" value="${gs.scores[0]}" min="0" style="width:50px;">
-          <label style="font-size:0.72rem;color:var(--team2);min-width:30px;">T2:</label>
+          <label style="color:var(--team2);min-width:30px;">T2:</label>
           <input type="number" id="debug-score-t2" class="debug-select" value="${gs.scores[1]}" min="0" style="width:50px;">
           <button class="btn-debug" onclick="app.debugSetScores()">Set</button></div>
         <div class="debug-controls-row">
-          <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Chkobba T1:</label>
+          <label style="color:var(--text-secondary);min-width:65px;">Chkobba T1:</label>
           <input type="number" id="debug-shk-t1" class="debug-select" value="${gs.shkobbaCount[0]}" min="0" style="width:50px;">
-          <label style="font-size:0.72rem;color:var(--text-secondary);min-width:65px;">Chkobba T2:</label>
+          <label style="color:var(--text-secondary);min-width:65px;">Chkobba T2:</label>
           <input type="number" id="debug-shk-t2" class="debug-select" value="${gs.shkobbaCount[1]}" min="0" style="width:50px;">
           <button class="btn-debug" onclick="app.debugSetShkobba()">Set</button></div>
       </div></div>
@@ -283,21 +284,21 @@
           if (p.id === this.myPlayerId) return '';
           if (D.bots[p.id]) {
             return `<div class="debug-controls-row" style="align-items:center;">
-              <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
+              <span style="color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
               <span class="bot-badge" style="margin-left:0.3rem;">BOT</span>
               <button class="btn-debug danger" onclick="app.debugRemoveBot(${p.id})" style="margin-left:auto;">Remove Bot</button></div>
-            <label class="debug-controls-row" style="align-items:center;gap:0.3rem;font-size:0.68rem;color:var(--text-secondary);">
+            <label class="debug-controls-row debug-check" style="align-items:center;gap:0.3rem;color:var(--text-secondary);">
               <input type="checkbox" id="debug-see-all-${p.id}" ${D.seeAll && D.seeAll[p.id] ? 'checked' : ''} onchange="app.debugSetSeeAll(${p.id}, this.checked)"> Sees all cards</label>
             ${this.botRateRowHtml(p.id, D.botRates ? D.botRates[p.id] : null)}`;
           }
           return `<div class="debug-controls-row" style="align-items:center;">
-            <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
-            <select id="debug-bot-diff-${p.id}" class="debug-select" style="font-size:0.68rem;padding:0.2rem;width:70px;margin-left:auto;">
+            <span style="color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
+            <select id="debug-bot-diff-${p.id}" class="debug-select" style="width:70px;margin-left:auto;">
               <option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select>
             <button class="btn-debug" onclick="app.debugAddBot(${p.id})">+ Bot</button></div>`;
         }).join('')}
         <div class="debug-controls-row" style="align-items:center;">
-          <span style="font-size:0.72rem;color:var(--text-secondary);">👁 All bots see all cards</span>
+          <span style="color:var(--text-secondary);">👁 All bots see all cards</span>
           <button id="debug-see-all-on" class="btn-debug" onclick="app.debugSeeAllBots(true)" style="margin-left:auto;">On</button>
           <button id="debug-see-all-off" class="btn-debug" onclick="app.debugSeeAllBots(false)">Off</button></div>
       </div></div>
@@ -306,8 +307,8 @@
         ${gs.players.map((p) => {
           const mode = (D.dealModes && D.dealModes[p.id]) || 'normal';
           return `<div class="debug-controls-row" style="align-items:center;">
-            <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}${p.id === this.myPlayerId ? ' (you)' : ''}</span>
-            <select id="debug-deal-${p.id}" class="debug-select" style="font-size:0.68rem;padding:0.2rem;width:110px;margin-left:auto;" onchange="app.debugSetDealMode(${p.id}, this.value)">
+            <span style="color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}${p.id === this.myPlayerId ? ' (you)' : ''}</span>
+            <select id="debug-deal-${p.id}" class="debug-select" style="width:110px;margin-left:auto;" onchange="app.debugSetDealMode(${p.id}, this.value)">
               ${['normal', 'good', 'bad'].map((m) => `<option value="${m}"${m === mode ? ' selected' : ''}>${{ normal: 'Normal', good: 'Good cards', bad: 'Bad cards' }[m]}</option>`).join('')}</select></div>`;
         }).join('')}
         <button id="debug-deal-normal" class="btn-debug" onclick="app.debugDealAllNormal()">All normal</button>
@@ -315,25 +316,25 @@
 
       <div class="debug-section"><div class="debug-section-title">Team Control</div><div class="debug-controls">
         ${gs.players.map((p) => `<div class="debug-controls-row" style="align-items:center;">
-          <span style="font-size:0.72rem;color:var(--team${p.team + 1});">P${p.id} ${escapeHtml(p.name)} — T${p.team + 1}</span>
-          <button class="btn-debug" onclick="app.debugSwapTeam(${p.id})" style="margin-left:auto;font-size:0.68rem;">Move to T${(p.team === 0 ? 1 : 0) + 1}</button></div>`).join('')}
+          <span style="color:var(--team${p.team + 1});">P${p.id} ${escapeHtml(p.name)} — T${p.team + 1}</span>
+          <button class="btn-debug" onclick="app.debugSwapTeam(${p.id})" style="margin-left:auto;">Move to T${(p.team === 0 ? 1 : 0) + 1}</button></div>`).join('')}
       </div></div>
 
       <div class="debug-section"><div class="debug-section-title">Player Control</div><div class="debug-controls">
         ${ctl !== null
           ? `<div class="debug-controls-row" style="align-items:center;">
-              <span style="font-size:0.72rem;color:var(--gold);">Controlling P${ctl} ${escapeHtml((gs.players[ctl] || {}).name || '?')}</span>
+              <span style="color:var(--gold);">Controlling P${ctl} ${escapeHtml((gs.players[ctl] || {}).name || '?')}</span>
               <button class="btn-debug danger" onclick="app.debugReleasePossess()" style="margin-left:auto;">Release</button></div>`
           : gs.players.filter((p) => p.id !== this.myPlayerId).map((p) => `<div class="debug-controls-row" style="align-items:center;">
-              <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
-              <button class="btn-debug" onclick="app.debugPossessPlayer(${p.id})" style="margin-left:auto;font-size:0.68rem;">Play As</button></div>`).join('')}
+              <span style="color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
+              <button class="btn-debug" onclick="app.debugPossessPlayer(${p.id})" style="margin-left:auto;">Play As</button></div>`).join('')}
       </div></div>
 
       <div class="debug-section"><div class="debug-section-title">Host Powers</div><div class="debug-controls">
         <button class="btn-debug ${gs.frozen ? 'danger' : ''}" onclick="app.debugToggleFreeze()">${gs.frozen ? '▶ Unfreeze Game' : '❄ Freeze Game'}</button>
         <button class="btn-debug ${this._spyMode ? 'danger' : ''}" onclick="app.debugToggleSpy()">${this._spyMode ? '🔒 Hide Hands' : '👁 Spy Mode (See All Hands)'}</button>
         <div class="debug-controls-row">
-          <label style="font-size:0.72rem;color:var(--text-secondary);min-width:70px;">Win Score:</label>
+          <label style="color:var(--text-secondary);min-width:70px;">Win Score:</label>
           <input type="number" id="debug-win-score" class="debug-select" value="${gs.winScore}" min="1" style="width:60px;">
           <button class="btn-debug" onclick="app.debugSetWinScore()">Set</button></div>
       </div></div>
@@ -366,9 +367,9 @@
         return `<div class="${m.dir === '←' ? 'in' : ''}">${t} ${m.dir} ${escapeHtml(m.text)}</div>`;
       }).join('') || '<div>none yet</div>';
       return `<div class="debug-section"><div class="debug-section-title">Room / Seat / Connection</div>
-          <div style="font-size:0.7rem;color:var(--text-secondary);line-height:1.6;font-family:monospace;">${rows.join('')}</div></div>
+          <div style="color:var(--text-secondary);line-height:1.6;font-family:monospace;">${rows.join('')}</div></div>
         <div class="debug-section"><div class="debug-section-title">Seats</div>
-          <div style="font-size:0.7rem;color:var(--text-secondary);line-height:1.6;font-family:monospace;">${seats || 'none'}</div></div>
+          <div style="color:var(--text-secondary);line-height:1.6;font-family:monospace;">${seats || 'none'}</div></div>
         <div class="debug-section"><div class="debug-section-title">Recent Messages (→ sent, ← received)</div>
           <div class="debug-log">${msgs}</div></div>`;
     },
@@ -490,11 +491,11 @@
     botRateRowHtml(seat, rate) {
       const on = rate !== null && rate !== undefined;
       return `<div class="debug-controls-row" style="align-items:center;gap:0.3rem;">
-        <span style="font-size:0.68rem;color:var(--text-secondary);">Win rate</span>
-        <input type="range" id="debug-rate-${seat}" min="0" max="100" step="5" value="${on ? rate : 50}" style="flex:1;min-width:60px;"
+        <span style="color:var(--text-secondary);">Win rate</span>
+        <input type="range" id="debug-rate-${seat}" class="gold-range${on ? '' : ' is-off'}" min="0" max="100" step="5" value="${on ? rate : 50}" style="flex:1;min-width:60px;--fill:${on ? rate / 100 : 0};"
           onchange="app.debugSetBotRate(${seat}, this.value)">
-        <span id="debug-rate-label-${seat}" style="font-size:0.68rem;min-width:2.4rem;text-align:right;color:${on ? 'var(--gold)' : 'var(--text-dim)'};">${on ? rate + '%' : 'off'}</span>
-        <button class="btn-debug" onclick="app.debugSetBotRate(${seat}, null)" style="font-size:0.68rem;padding:0.2rem 0.4rem;">Off</button></div>`;
+        <span id="debug-rate-label-${seat}" style="min-width:2.4rem;text-align:right;color:${on ? 'var(--gold)' : 'var(--text-dim)'};">${on ? rate + '%' : 'off'}</span>
+        <button class="btn-debug" onclick="app.debugSetBotRate(${seat}, null)">Off</button></div>`;
     },
 
     debugToggleSpy() {
@@ -518,7 +519,7 @@
       const ctl = this.debugCtl();
       if (ctl !== null && gs.players) {
         const cp = gs.players[ctl];
-        banner.innerHTML = `<span class="possess-label">CONTROLLING: P${ctl} ${escapeHtml(cp ? cp.name : '?')} (T${cp ? cp.team + 1 : '?'})</span><button class="btn-debug" onclick="app.debugReleasePossess()" style="padding:0.2rem 0.6rem;font-size:0.68rem;">Release</button>`;
+        banner.innerHTML = `<span class="possess-label">CONTROLLING: P${ctl} ${escapeHtml(cp ? cp.name : '?')} (T${cp ? cp.team + 1 : '?'})</span><button class="btn-debug" onclick="app.debugReleasePossess()">Release</button>`;
         banner.style.display = '';
       } else {
         banner.style.display = 'none';
