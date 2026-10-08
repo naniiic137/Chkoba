@@ -121,6 +121,58 @@
   }
   function dealAnimMs(numPlayers, withTable) { return ((withTable ? 4 : 0) + 3 * numPlayers) * 90 + 600; }
 
+  // The debug panel's deal control: each seat is dealt Normal (a fair, random deal), Good
+  // cards or Bad cards. Before a deal the deck is put in an order that gives each seat
+  // what was asked for. The deck keeps its 40 cards and every hand its size: only the
+  // order changes. A deal pops the table (first deal of a deck) and then 3 cards per
+  // seat, seat 0 first, from the end of the deck.
+  const tableSum = (t) => t.reduce((s, c) => s + c.value, 0);
+  const plain = (c) => c.suit !== DIAMONDS && c.name !== '7' && c.name !== '6';
+  // how much a card is worth to the one holding it, on this table
+  function cardPower(c, table) {
+    let s = 0;
+    if (c.suit === DIAMONDS && c.name === '7') s += 100;
+    if (c.name === '7') s += 40; else if (c.name === '6') s += 12;
+    if (c.suit === DIAMONDS) s += 20;
+    if (table.length) {
+      const caps = R.legalCaptures(table, c.value);
+      if (caps.length) s += 10 + 3 * Math.max(...caps.map((x) => x.length)) + (tableSum(table) === c.value ? 40 : 0);
+    }
+    return s;
+  }
+  // modes[seat]: 'good', 'bad', or anything else for normal. Good seats pick in turn, by
+  // seat order, the best card left for the table; bad seats get the weakest cards (low,
+  // plain, taking nothing); normal seats get cards from the deck as it was shuffled.
+  function stackDeal(deck, table, numPlayers, modes, withTable) {
+    const good = [], bad = [], normal = [];
+    for (let i = 0; i < numPlayers; i++) (modes[i] === 'good' ? good : modes[i] === 'bad' ? bad : normal).push(i);
+    if (!good.length && !bad.length) return;
+    let left = deck.length;
+    const quota = (k) => { const q = Math.min(k, left); left -= q; return q; };
+    const tableQ = withTable ? quota(4) : 0;
+    const handQ = Array.from({ length: numPlayers }, () => quota(3));
+    const pool = deck.slice();          // in the shuffled order: the deck pops from the end
+    const pickBest = (score) => {
+      let bi = pool.length - 1;
+      for (let i = pool.length - 2; i >= 0; i--) if (score(pool[i]) > score(pool[bi])) bi = i;
+      return pool.splice(bi, 1)[0];
+    };
+    // a new table: plain high cards a bad hand's low cards cannot take; else a fair one
+    const newTable = [];
+    for (let i = 0; i < tableQ; i++) newTable.push(bad.length ? pickBest((c) => (plain(c) ? 100 : 0) + c.value) : pool.pop());
+    const t = withTable ? newTable : table;
+    const hands = Array.from({ length: numPlayers }, () => []);
+    for (let round = 0; round < 3; round++) {
+      for (const i of good) if (round < handQ[i]) hands[i].push(pickBest((c) => cardPower(c, t)));
+    }
+    for (const i of bad) for (let k = 0; k < handQ[i]; k++) hands[i].push(pickBest((c) => -cardPower(c, t) - c.value / 100));
+    for (const i of normal) for (let k = 0; k < handQ[i]; k++) hands[i].push(pool.pop());
+    const order = newTable.slice();
+    for (let i = 0; i < numPlayers; i++) order.push(...hands[i]);
+    deck.length = 0;
+    deck.push(...pool, ...order.reverse());
+  }
+
   const realClock = {
     now: () => Date.now(),
     setTimeout: (f, ms) => setTimeout(f, ms),
@@ -150,6 +202,10 @@
       this.debugCard = 1000;           // ids for cards the panel adds
       this.frozen = false;             // the panel's freeze: no bot, no timer, no move
       this.botsSeeAll = false;         // the panel's "Bots see all cards": every bot plays hard with every hand and the deck
+      this.botRates = [];              // the panel's win rate per bot seat (0-100), null/undefined: off, the bot plays its level
+      this.dealModes = [];             // the panel's deal control per seat: 'good', 'bad', or normal (a fair deal)
+      // how hard a bot may think: 'small' on a server (the Worker, the Node server), 'full' offline in the page
+      this.botSearch = env.botSearch === 'full' ? 'full' : 'small';
       this.debugCtl = null;            // a seat played from the panel ("play as"): no bot plays it
       this.debugCtlConn = null;
       this.opts = normalizeOpts(opts);
@@ -381,6 +437,7 @@
     _dealRound() {
       const gs = this.gs;
       const withTable = gs.roundNum === 0;
+      if (this.dealModes.some((m) => m === 'good' || m === 'bad')) stackDeal(gs.deck, gs.tableCards, gs.numPlayers, this.dealModes, withTable);
       if (withTable) {
         for (let i = 0; i < 4 && gs.deck.length > 0; i++) gs.tableCards.push(gs.deck.pop());
         gs.currentTurn = (gs.dealerIndex + 1) % gs.numPlayers;
@@ -431,7 +488,9 @@
       if (!hand || !hand.length) return;
       // legal captures only: a card of equal value on the table is taken before any sum.
       // With the debug switch on, every bot plays hard and knows every hand and the deck.
-      const level = this.botsSeeAll ? 'hard' : this._botLevel(pid);
+      // With a win rate set for this seat, it mixes the see-all best move with weak ones.
+      const rated = this._botRate(pid) !== null;
+      const level = this.botsSeeAll || rated ? 'hard' : this._botLevel(pid);
       const mv = R.chooseBotMove(hand, gs.tableCards, level, gs.forceCapture, undefined, this._botCtx(pid));
       this._play(pid, mv.cardId, mv.captureCardIds);
     }
@@ -439,14 +498,18 @@
     // What the hard bot may know, as a fair player at the table: the piles (every take was
     // played face up), how many cards each player holds, the deck size, the dealer.
     // Never another hand or the deck order, unless the debug switch "Bots see all cards" is on.
+    _botRate(pid) { const r = this.botRates[pid]; return Number.isInteger(r) ? r : null; }
     _botCtx(pid) {
       const gs = this.gs;
+      const rate = this._botRate(pid);
       return {
+        budget: this.botSearch,
+        bestShare: rate !== null ? R.winRateToBestShare(rate) : undefined,
         seat: pid, numPlayers: gs.numPlayers, teams: gs.players.map((p) => p.team),
         handCounts: gs.hands.map((h) => h.length), deckCount: gs.deck.length,
         captured: gs.capturedTeams, dealer: gs.dealerIndex, lastCaptureTeam: gs.lastCaptureTeam,
         chkobbas: gs.shkobbaCount,
-        seeAll: this.botsSeeAll ? { hands: gs.hands, deck: gs.deck } : undefined,
+        seeAll: this.botsSeeAll || rate !== null ? { hands: gs.hands, deck: gs.deck } : undefined,
       };
     }
 
@@ -654,6 +717,7 @@
         deck: gs ? gs.deck.map(slim) : [],
         captured: gs ? gs.capturedTeams.map((t) => t.length) : [0, 0],
         history: this.debugHistory.length, saved: !!this.debugSaved, frozen: this.frozen, seeAll: this.botsSeeAll,
+        botRates: this.seats.map((s, i) => this._botRate(i)), dealModes: this.seats.map((s, i) => this.dealModes[i] || 'normal'),
         ctl: this.debugCtlConn === conn ? this.debugCtl : null,
         bots: this.seats.map((s) => (s ? s.bot || s.takeover || null : null)),
       };
@@ -885,6 +949,23 @@
       this.botsSeeAll = typeof m.on === 'boolean' ? m.on : !this.botsSeeAll;
       return { text: 'Bots see all cards ' + (this.botsSeeAll ? 'ON' : 'OFF') };
     },
+    // one bot's win rate, 0-100, or null for off (it plays its own level again)
+    botRate(m) {
+      if (!seatOk(this, m.seat)) return { error: 'bad-slot' };
+      if (m.value === null) { this.botRates[m.seat] = null; return { text: 'P' + m.seat + ' win rate off' }; }
+      const v = parseInt(m.value, 10);
+      if (isNaN(v) || v < 0 || v > 100) return { error: 'bad-value', text: 'Win rate 0-100' };
+      this.botRates[m.seat] = v;
+      return { text: 'P' + m.seat + ' win rate ' + v + '%' };
+    },
+    // one seat's deal from the next deal on: 'normal', 'good' or 'bad'
+    dealMode(m) {
+      if (!seatOk(this, m.seat)) return { error: 'bad-slot' };
+      if (!['normal', 'good', 'bad'].includes(m.mode)) return { error: 'bad-value' };
+      this.dealModes[m.seat] = m.mode === 'normal' ? null : m.mode;
+      return { text: 'P' + m.seat + ' deal: ' + m.mode + ' (from the next deal)' };
+    },
+    dealNormal() { this.dealModes = []; return { text: 'Every seat dealt normally' }; },
   };
 
   // ================= MESSAGES (seat, msg) =================
@@ -1076,7 +1157,7 @@
   };
 
   return {
-    Room, HANDLERS, DEBUG_OPS, normalizeOpts, normalizeLook, newRoomCode, isRoomCode, newToken, createDeck, cardName,
+    Room, HANDLERS, DEBUG_OPS, stackDeal, normalizeOpts, normalizeLook, newRoomCode, isRoomCode, newToken, createDeck, cardName,
     HOLD_MS, BOT_NAMES, EMOTES, moveAnimMs, dealAnimMs,
   };
 });

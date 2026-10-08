@@ -285,7 +285,8 @@
             return `<div class="debug-controls-row" style="align-items:center;">
               <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
               <span class="bot-badge" style="margin-left:0.3rem;">BOT</span>
-              <button class="btn-debug danger" onclick="app.debugRemoveBot(${p.id})" style="margin-left:auto;">Remove Bot</button></div>`;
+              <button class="btn-debug danger" onclick="app.debugRemoveBot(${p.id})" style="margin-left:auto;">Remove Bot</button></div>
+            ${this.botRateRowHtml(p.id, D.botRates ? D.botRates[p.id] : null)}`;
           }
           return `<div class="debug-controls-row" style="align-items:center;">
             <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}</span>
@@ -294,6 +295,17 @@
             <button class="btn-debug" onclick="app.debugAddBot(${p.id})">+ Bot</button></div>`;
         }).join('')}
         <button id="debug-see-all" class="btn-debug ${D.seeAll ? 'danger' : ''}" onclick="app.debugToggleSeeAll()">👁 Bots see all cards (${D.seeAll ? 'ON' : 'OFF'})</button>
+      </div></div>
+
+      <div class="debug-section"><div class="debug-section-title">Deal Control (from the next deal)</div><div class="debug-controls">
+        ${gs.players.map((p) => {
+          const mode = (D.dealModes && D.dealModes[p.id]) || 'normal';
+          return `<div class="debug-controls-row" style="align-items:center;">
+            <span style="font-size:0.72rem;color:var(--text-secondary);">P${p.id} ${escapeHtml(p.name)}${p.id === this.myPlayerId ? ' (you)' : ''}</span>
+            <select id="debug-deal-${p.id}" class="debug-select" style="font-size:0.68rem;padding:0.2rem;width:110px;margin-left:auto;" onchange="app.debugSetDealMode(${p.id}, this.value)">
+              ${['normal', 'good', 'bad'].map((m) => `<option value="${m}"${m === mode ? ' selected' : ''}>${{ normal: 'Normal', good: 'Good cards', bad: 'Bad cards' }[m]}</option>`).join('')}</select></div>`;
+        }).join('')}
+        <button id="debug-deal-normal" class="btn-debug" onclick="app.debugDealAllNormal()">All normal</button>
       </div></div>
 
       <div class="debug-section"><div class="debug-section-title">Team Control</div><div class="debug-controls">
@@ -462,6 +474,21 @@
     debugReleasePossess() { this.cancelSelection(false); return this._dbgOp('release'); },
     debugToggleFreeze() { return this._dbgOp('freeze'); },
     debugToggleSeeAll() { const D = this._dbg(); return this._dbgOp('seeAll', { on: !(D && D.seeAll) }); },
+    // a bot's win rate: 0-100, or null for off (the bot plays its own level)
+    debugSetBotRate(seat, value) { return this._dbgOp('botRate', { seat, value: value === null ? null : parseInt(value, 10) }); },
+    debugSetDealMode(seat, mode) { return this._dbgOp('dealMode', { seat, mode }); },
+    debugDealAllNormal() { return this._dbgOp('dealNormal'); },
+
+    // the win rate slider under a bot in Bot Management
+    botRateRowHtml(seat, rate) {
+      const on = rate !== null && rate !== undefined;
+      return `<div class="debug-controls-row" style="align-items:center;gap:0.3rem;">
+        <span style="font-size:0.68rem;color:var(--text-secondary);">Win rate</span>
+        <input type="range" id="debug-rate-${seat}" min="0" max="100" step="5" value="${on ? rate : 50}" style="flex:1;min-width:60px;"
+          onchange="app.debugSetBotRate(${seat}, this.value)">
+        <span id="debug-rate-label-${seat}" style="font-size:0.68rem;min-width:2.4rem;text-align:right;color:${on ? 'var(--gold)' : 'var(--text-dim)'};">${on ? rate + '%' : 'off'}</span>
+        <button class="btn-debug" onclick="app.debugSetBotRate(${seat}, null)" style="font-size:0.68rem;padding:0.2rem 0.4rem;">Off</button></div>`;
+    },
 
     debugToggleSpy() {
       if (!this._dbg()) { this.toast('Debug is host-only'); return; }
