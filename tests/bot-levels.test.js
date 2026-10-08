@@ -78,4 +78,41 @@ test('easy and medium make exactly the moves they made before the hard bot chang
   assert.equal(hash(easyMediumTrace(true)), PINNED.sha256);
 });
 
+test('the hard bot only makes legal moves, with and without "bots see all cards", and repeats itself on the same rng', () => {
+  for (let s = 1; s <= 150; s++) {
+    const p = position(s);
+    for (const seeAll of [false, true]) {
+      const ctx = { ...p.ctx };
+      if (seeAll) {
+        // the other hands and the deck, from the cards nobody has seen
+        const rest = p.rest.slice();
+        ctx.seeAll = { hands: ctx.handCounts.map((k, i) => (i === ctx.seat ? p.hand : rest.splice(0, k))), deck: rest.slice(0, ctx.deckCount) };
+      }
+      const mv = R.chooseBotMove(p.hand, p.table, 'hard', p.force, rngFrom(s), ctx);
+      const verdict = R.checkMove(p.hand, p.table, mv.cardId, mv.captureCardIds, p.force);
+      assert.equal(verdict.ok, true, `seed ${s} seeAll ${seeAll}: ${verdict.reason}`);
+      assert.deepEqual(R.chooseBotMove(p.hand, p.table, 'hard', p.force, rngFrom(s), ctx), mv);
+    }
+  }
+});
+
+test('the hard bot does not leave a table the next player can sweep, and takes the 7 of diamonds', () => {
+  const c = (id, name, suit, value) => ({ id, name, suit, display: name, value });
+  // nothing to take: the 5 would leave 2+5 = 7 for the opponent's chkobba, the king leaves 12
+  const table = [c(1, '2', 'clubs', 2)];
+  const hand = [c(10, '5', 'hearts', 5), c(11, 'king', 'spades', 10)];
+  const ctx = { seat: 0, numPlayers: 2, teams: [0, 1], handCounts: [2, 2], deckCount: 12, captured: [[], []], dealer: 1, lastCaptureTeam: -1, chkobbas: [0, 0] };
+  assert.deepEqual(R.chooseBotMove(hand, table, 'hard', true, rngFrom(1), ctx), { cardId: 11, captureCardIds: [] });
+  // the same in 2v2 late in a deck: the four 7s are among the 12 cards still out, the
+  // other 25 are in the piles (counted by the bot)
+  const out = (x) => x.name === '7' || (x.value <= 4 && (x.suit === 'hearts' || x.suit === 'clubs')) || (x.name === '3' && x.suit === 'spades');
+  const piles = deck().filter((x) => !out(x) && !(x.name === '2' && x.suit === 'clubs') && !(x.name === '5' && x.suit === 'hearts') && !(x.name === 'king' && x.suit === 'spades'));
+  assert.equal(piles.length, 25);
+  const ctx4 = { ...ctx, numPlayers: 4, teams: [0, 1, 0, 1], handCounts: [2, 2, 2, 2], deckCount: 6, captured: [piles.filter((x, i) => i % 2 === 0), piles.filter((x, i) => i % 2 === 1)], lastCaptureTeam: 0 };
+  for (let s = 1; s <= 5; s++) assert.deepEqual(R.chooseBotMove(hand, table, 'hard', true, rngFrom(s), ctx4), { cardId: 11, captureCardIds: [] });
+  const t2 = [c(2, '7', 'diamonds', 7), c(3, '2', 'clubs', 2)];
+  const h2 = [c(12, '7', 'clubs', 7), c(13, '2', 'hearts', 2), c(14, 'king', 'spades', 10)];
+  assert.deepEqual(R.chooseBotMove(h2, t2, 'hard', true, rngFrom(2), ctx).cardId, 12);
+});
+
 

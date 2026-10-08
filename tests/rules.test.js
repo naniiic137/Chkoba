@@ -77,10 +77,13 @@ test('the bot never takes a sum when an equal card is on the table', () => {
 test('the bot prefers valuable captures and places its lowest safe card on hard', () => {
   const t = [card('7', 'diamonds'), card('2', 'clubs')];
   const hand = [card('7', 'clubs'), card('2', 'hearts'), card('king', 'spades')];
-  assert.deepEqual(R.chooseBotMove(hand, t, 'hard', true), { cardId: hand[0].id, captureCardIds: [t[0].id] });
+  // the hard bot samples the unseen cards with the rng: a seeded one keeps the test exact
+  let seed = 1;
+  const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  assert.deepEqual(R.chooseBotMove(hand, t, 'hard', true, rng), { cardId: hand[0].id, captureCardIds: [t[0].id] });
   const t2 = [card('king', 'hearts')];
   const hand2 = [card('6', 'clubs'), card('ace', 'hearts'), card('3', 'spades')];
-  assert.deepEqual(R.chooseBotMove(hand2, t2, 'hard', true), { cardId: hand2[1].id, captureCardIds: [] });
+  assert.deepEqual(R.chooseBotMove(hand2, t2, 'hard', true, rng), { cardId: hand2[1].id, captureCardIds: [] });
 });
 
 test('an easy bot that drew a non-capturing card still takes a forced match', () => {
