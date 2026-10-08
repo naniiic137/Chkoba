@@ -394,6 +394,8 @@ test('a normal seat never receives another hand or the deck while another seat d
   const audit = (room, seat, msg, text) => {
     if (seat !== 1 || !room.gs) return;
     assert.ok(!/"deck"|"hands"|"capturedTeams"|"debug"/.test(text.replace(/"deckCount"/g, '').replace(/"debugRev"/g, '')), 'private key in ' + text.slice(0, 80));
+    // nor which seat is rigged: the bots' win rate and the deal control stay with the host
+    assert.ok(!/seeAll|botRate|dealMode|bestShare|"good"|"bad"/.test(text), 'debug setting in ' + text.slice(0, 80));
     const hidden = new Set(room.gs.deck.map((c) => c.id));
     room.gs.hands.forEach((h, i) => { if (i !== 1) h.forEach((c) => hidden.add(c.id)); });
     for (const c of cardsIn(msg)) assert.ok(!hidden.has(c.id), `seat 1 saw hidden card ${c.id} in a ${msg.t}`);
@@ -432,6 +434,31 @@ test('a normal seat never receives another hand or the deck while another seat d
   assert.equal(a.send('debug', { op: 'seeAll', on: false }).ok, true);
   assert.equal(room.botsSeeAll, false);
   assert.equal(a.state.debug.seeAll, false);
+  // the win rate slider on the bot, and the deal control: the host Good, the guest's seat Bad
+  assert.equal(b.send('debug', { op: 'botRate', seat: 1, value: 100 }).error, 'not-debug');
+  assert.equal(b.send('debug', { op: 'dealMode', seat: 1, mode: 'good' }).error, 'not-debug');
+  assert.equal(a.send('debug', { op: 'botRate', seat: 1, value: 101 }).error, 'bad-value');
+  assert.equal(a.send('debug', { op: 'botRate', seat: 1, value: 100 }).ok, true);
+  assert.equal(a.send('debug', { op: 'dealMode', seat: 0, mode: 'good' }).ok, true);
+  assert.equal(a.send('debug', { op: 'dealMode', seat: 1, mode: 'bad' }).ok, true);
+  assert.deepEqual(a.state.debug.botRates, [null, 100]);
+  assert.deepEqual(a.state.debug.dealModes, ['good', 'bad']);
+  const deckNow = room.gs.deck.length;
+  playUntil([a], clock, () => room.gs.deck.length < deckNow || room.gs.phase !== 'playing');
+  assert.equal(room.gs.phase, 'playing');
+  {
+    // a stacked deal: the same cards, the same hand sizes, the guest's seat without a 7 or a diamond
+    const all = [...room.gs.deck, ...room.gs.tableCards, ...room.gs.hands.flat(), ...room.gs.capturedTeams.flat()];
+    assert.equal(new Set(all.map((c) => c.id)).size, all.length);
+    assert.equal(room.gs.hands[1].length, 3);
+    assert.ok(room.gs.hands[1].every((c) => c.suit !== 'diamonds' && c.name !== '7'), 'a bad hand');
+  }
+  assert.equal(a.send('debug', { op: 'dealNormal' }).ok, true);
+  assert.deepEqual(a.state.debug.dealModes, ['normal', 'normal']);
+  assert.equal(a.send('debug', { op: 'botRate', seat: 1, value: null }).ok, true);
+  assert.deepEqual(a.state.debug.botRates, [null, null]);
+  const saved = JSON.stringify(room.serialize());
+  assert.ok(!/botRates|dealModes/.test(saved), 'the debug settings are not saved');
   assert.equal(a.send('debug', { op: 'removeBot', seat: 1 }).ok, true);
   assert.equal(room.serialize().botsSeeAll, undefined, 'the switch is not saved');
   // freeze: the guest cannot move and nothing plays by itself

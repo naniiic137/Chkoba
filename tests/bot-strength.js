@@ -1,15 +1,20 @@
 // Bot strength: whole matches between bot levels, played with the room's own rules.
 // Not part of npm test (it takes minutes). Run with:
-//   node tests/bot-strength.js                 # every matchup, 200 matches each
+//   node tests/bot-strength.js                 # the strength matchups, 200 matches each
 //   node tests/bot-strength.js 100 hard-old    # 100 matches of one matchup
-// Matchups: hard-old (new hard vs old hard, 1v1), team-old (the same as 2v2 teams),
-// seeall-hard (hard that sees all cards vs normal hard, 1v1).
+// Strength: hard-old (new hard vs old hard, 1v1), team-old (the same as 2v2 teams),
+// small-old (hard with the servers' smaller search vs old hard, 1v1), seeall-hard (hard
+// that sees all cards vs normal hard, 1v1).
+// Debug panel (only when named): calibrate (the win rate slider: see-all best moves
+// mixed with worst ones, several shares, vs normal hard), good100 (slider 100% on a seat
+// dealt Good cards vs normal hard), bad (normal hard dealt Bad cards vs normal hard).
 // Every deck order comes from a seeded generator and every seed is played twice with
 // the sides swapped, so both sides get the same cards. Moves are checked with
 // rules.checkMove, and the game flow follows public/js/room.js (deal order, turn
 // order, the dealer's last card, the last taker gets the table, instant diamond win).
 'use strict';
 const R = require('../public/js/rules.js');
+const { stackDeal } = require('../public/js/room.js');
 
 // ---- the hard bot as it was before this change (public/js/rules.js, chooseBotMove) ----
 const DIAMONDS = 'diamonds';
@@ -86,7 +91,7 @@ function shuffledDeck(rand) {
 }
 
 // ---- the players ----
-const timing = { hard: [], seeall: [] };
+const timing = { hard: [], small: [], seeall: [] };
 function timed(kind, f) {
   const t0 = process.hrtime.bigint();
   const mv = f();
@@ -95,9 +100,13 @@ function timed(kind, f) {
 }
 const PLAYERS = {
   hard: (g, p, rand) => timed('hard', () => R.chooseBotMove(g.hands[p], g.table, 'hard', g.force, rand, ctxFor(g, p, false))),
+  hardsmall: (g, p, rand) => timed('small', () => R.chooseBotMove(g.hands[p], g.table, 'hard', g.force, rand, { ...ctxFor(g, p, false), budget: 'small' })),
   seeall: (g, p, rand) => timed('seeall', () => R.chooseBotMove(g.hands[p], g.table, 'hard', g.force, rand, ctxFor(g, p, true))),
   oldhard: (g, p, rand) => oldChooseBotMove(g.hands[p], g.table, 'hard', g.force, rand),
 };
+// 'share:0.8': the win rate slider's bot, the see-all best move this share of the time
+const player = (name) => PLAYERS[name] || ((g, p, rand) => R.chooseBotMove(g.hands[p], g.table, 'hard', g.force, rand,
+  { ...ctxFor(g, p, true), bestShare: parseFloat(name.split(':')[1]) }));
 // what the room hands a bot (public/js/room.js, _botCtx)
 function ctxFor(g, p, seeAll) {
   return {
@@ -108,21 +117,24 @@ function ctxFor(g, p, seeAll) {
 }
 
 // ---- one match, as public/js/room.js plays it ----
-function playMatch(n, seats, seed, winScore) {
+function playMatch(n, seats, seed, winScore, modes) {
   const deckRand = rngFrom(seed * 2 + 1), botRand = rngFrom(seed * 2 + 2);
   const teams = Array.from({ length: n }, (_, i) => i % 2);
   const scores = [0, 0];
   let dealer = 0;
   for (let deckNo = 0; deckNo < 50; deckNo++) {
     const g = { n, teams, force: true, deck: shuffledDeck(deckRand), table: [], hands: [], captured: [[], []], chk: [0, 0], lastCap: -1, dealer };
+    // the debug panel's deal control, as room.js _dealRound applies it
+    if (modes) stackDeal(g.deck, g.table, n, modes, true);
     for (let i = 0; i < 4; i++) g.table.push(g.deck.pop());
     let turn = (dealer + 1) % n;
-    for (;;) {
+    for (let first = true; ; first = false) {
+      if (modes && !first) stackDeal(g.deck, g.table, n, modes, false);
       for (let i = 0; i < n; i++) { g.hands[i] = []; for (let j = 0; j < 3 && g.deck.length > 0; j++) g.hands[i].push(g.deck.pop()); }
       let last = -1;
       while (g.hands.some((h) => h.length)) {
         const p = turn, hand = g.hands[p];
-        const mv = PLAYERS[seats[p]](g, p, botRand);
+        const mv = player(seats[p])(g, p, botRand);
         const verdict = R.checkMove(hand, g.table, mv.cardId, mv.captureCardIds, g.force);
         if (!verdict.ok) throw new Error(`${seats[p]} made an illegal move: ${verdict.reason}`);
         const card = hand.splice(hand.findIndex((c) => c.id === mv.cardId), 1)[0];
@@ -156,8 +168,13 @@ function playMatch(n, seats, seed, winScore) {
 const MATCHUPS = {
   'hard-old': { n: 2, a: 'hard', b: 'oldhard', title: 'new hard vs old hard, 1v1' },
   'team-old': { n: 4, a: 'hard', b: 'oldhard', title: 'new hard team vs old hard team, 2v2' },
+  'small-old': { n: 2, a: 'hardsmall', b: 'oldhard', title: "new hard, servers' search, vs old hard, 1v1" },
   'seeall-hard': { n: 2, a: 'seeall', b: 'hard', title: 'see-all hard vs normal hard, 1v1' },
+  good100: { n: 2, a: 'share:1', b: 'hard', aMode: 'good', title: 'slider 100% dealt Good vs normal hard', debug: true },
+  bad: { n: 2, a: 'hard', b: 'hard', aMode: 'bad', title: 'hard dealt Bad vs normal hard', debug: true },
 };
+const SHARES = [0, 0.5, 0.65, 0.75, 0.8, 0.9, 0.97, 1];
+for (const q of SHARES) MATCHUPS['share' + q] = { n: 2, a: 'share:' + q, b: 'hard', title: `slider bot, best move share ${q}, vs normal hard`, debug: true };
 
 function run(name, matches, winScore) {
   const m = MATCHUPS[name];
@@ -168,7 +185,8 @@ function run(name, matches, winScore) {
       if (played >= matches) break;
       // side A sits on team 0 (seats 0 and 2), or on team 1 after the swap
       const seats = Array.from({ length: m.n }, (_, i) => ((i % 2 === 0) !== swap ? m.a : m.b));
-      const res = playMatch(m.n, seats, 1000 + s, winScore);
+      const modes = m.aMode ? Array.from({ length: m.n }, (_, i) => ((i % 2 === 0) !== swap ? m.aMode : 'normal')) : undefined;
+      const res = playMatch(m.n, seats, 1000 + s, winScore, modes);
       const teamA = swap ? 1 : 0;
       if (res.winner === teamA) winsA++;
       if (res.instant) instant++;
@@ -187,17 +205,18 @@ function timingLine(kind) {
   if (!t.length) return;
   const at = (q) => t[Math.min(t.length - 1, Math.floor(q * t.length))].toFixed(2);
   const mean = (t.reduce((s, x) => s + x, 0) / t.length).toFixed(2);
-  console.log(`  ${kind === 'hard' ? 'hard' : 'see-all hard'} move time on this machine: mean ${mean} ms, median ${at(0.5)}, p99 ${at(0.99)}, max ${t[t.length - 1].toFixed(2)} ms over ${t.length} moves`);
+  console.log(`  ${{ hard: 'hard', small: "hard, servers' search", seeall: 'see-all hard' }[kind]} move time on this machine: mean ${mean} ms, median ${at(0.5)}, p99 ${at(0.99)}, max ${t[t.length - 1].toFixed(2)} ms over ${t.length} moves`);
 }
 
 if (require.main === module) {
   const args = process.argv.slice(2);
   const matches = parseInt(args[0], 10) || 200;
-  const names = args.slice(1).filter((a) => MATCHUPS[a]);
+  const names = [].concat(...args.slice(1).map((a) => (a === 'calibrate' ? SHARES.map((q) => 'share' + q) : [a]))).filter((a) => MATCHUPS[a]);
   const winScore = 21;
   console.log(`Matches to ${winScore} points, force capture on, ${matches} matches per matchup (each deck order played from both sides)`);
-  for (const name of names.length ? names : Object.keys(MATCHUPS)) run(name, matches, winScore);
+  for (const name of names.length ? names : Object.keys(MATCHUPS).filter((k) => !MATCHUPS[k].debug)) run(name, matches, winScore);
   timingLine('hard');
+  timingLine('small');
   timingLine('seeall');
 }
 

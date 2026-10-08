@@ -96,6 +96,46 @@ test('the hard bot only makes legal moves, with and without "bots see all cards"
   }
 });
 
+test('the win rate slider: 100% is always the see-all best move, any share stays legal', () => {
+  assert.equal(R.winRateToBestShare(100), 1);
+  assert.equal(R.winRateToBestShare(0), 0);
+  for (let r = 0; r < 100; r += 10) assert.ok(R.winRateToBestShare(r) <= R.winRateToBestShare(r + 10));
+  for (let s = 1; s <= 60; s++) {
+    const p = position(s);
+    const rest = p.rest.slice();
+    const seeAll = { hands: p.ctx.handCounts.map((k, i) => (i === p.ctx.seat ? p.hand : rest.splice(0, k))), deck: rest.slice(0, p.ctx.deckCount) };
+    const best = R.chooseBotMove(p.hand, p.table, 'hard', p.force, rngFrom(s), { ...p.ctx, seeAll });
+    assert.deepEqual(R.chooseBotMove(p.hand, p.table, 'hard', p.force, rngFrom(s), { ...p.ctx, seeAll, bestShare: 1 }), best);
+    for (const bestShare of [0, 0.5]) {
+      const mv = R.chooseBotMove(p.hand, p.table, 'hard', p.force, rngFrom(s), { ...p.ctx, seeAll, bestShare });
+      assert.equal(R.checkMove(p.hand, p.table, mv.cardId, mv.captureCardIds, p.force).ok, true);
+    }
+  }
+});
+
+test('the deal control keeps the 40 cards and the hand sizes; Good seats share the strong cards by seat order', () => {
+  const { stackDeal } = require('../public/js/room.js');
+  for (let s = 1; s <= 40; s++) {
+    const rand = rngFrom(s);
+    const d = shuffled(deck(), rand);
+    // 2v2, first deal: seats 0 and 2 Good, seat 1 Bad, seat 3 normal
+    stackDeal(d, [], 4, ['good', 'bad', 'good', null], true);
+    assert.equal(d.length, 40);
+    assert.equal(new Set(d.map((c) => c.id)).size, 40);
+    const table = [d.pop(), d.pop(), d.pop(), d.pop()];
+    const hands = [0, 1, 2, 3].map(() => [d.pop(), d.pop(), d.pop()]);
+    const strong = (c) => c.name === '7' || c.suit === 'diamonds';
+    assert.ok(hands[0].concat(hands[2]).some((c) => c.suit === 'diamonds' && c.name === '7'), 'a Good seat has the 7 of diamonds');
+    assert.ok(hands[0].filter(strong).length >= 2 && hands[2].filter(strong).length >= 2, 'both Good seats get strong cards');
+    assert.ok(hands[1].every((c) => !strong(c) && c.name !== '6' && R.legalCaptures(table, c.value).length === 0), 'the Bad seat takes nothing');
+  }
+  // nobody set: the deck is left as shuffled
+  const d = shuffled(deck(), rngFrom(9));
+  const before = d.map((c) => c.id).join();
+  stackDeal(d, [], 2, [null, 'normal'], true);
+  assert.equal(d.map((c) => c.id).join(), before);
+});
+
 test('the hard bot does not leave a table the next player can sweep, and takes the 7 of diamonds', () => {
   const c = (id, name, suit, value) => ({ id, name, suit, display: name, value });
   // nothing to take: the 5 would leave 2+5 = 7 for the opponent's chkobba, the king leaves 12
