@@ -204,6 +204,8 @@ For verbose logging without the panel, add `?debug=1` to the URL, or set `localS
 | Game server | Cloudflare Workers + Durable Objects (free plan), or Node with express + ws |
 | Transport | Plain WebSockets with acks, heartbeat and reconnect |
 
+Design and themes by Jihed Jarboui ([@Jyhed](https://github.com/Jyhed)).
+
 ## License
 
 © 2026 Hamza Ben Ismail. All rights reserved.
