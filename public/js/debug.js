@@ -35,8 +35,8 @@
 
     // debug() toggles the panel.
     toggleDebug() {
-      // phones don't get the debug menu (it covered the hand); a computer only
-      if (!this.debugEnabled && this.isPhone()) { this.log('info', 'debug menu: computers only'); return 'the debug menu is for computers only'; }
+      // Only the host gets the debug menu (or the player in a bot game), on any device, any time.
+      if (!this.debugEnabled && !this.mayDebug()) { this.log('info', 'debug menu: host only'); return 'only the host can use the debug menu'; }
       this.debugEnabled = !this.debugEnabled;
       this._debugMinimized = false;
       this.log('info', 'debug mode', this.debugEnabled ? 'ON (verbose logging enabled)' : 'OFF');
@@ -53,10 +53,10 @@
       return this.debugEnabled ? 'debug panel open' : 'debug panel closed';
     },
 
-    // A phone: a touch screen whose short side is phone-sized (tablets and computers keep the menu).
-    isPhone() {
-      const touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-      return !!touch && Math.min(screen.width, screen.height) <= 600;
+    // Who may open the menu: the host of an online room, or anyone in a bot game or on the menu.
+    mayDebug() {
+      const online = !!this.roomCode && !this._isBotGame;
+      return !online || !!this.isHost;
     },
 
     // Makes this connection a debug connection (the room allows the host only).

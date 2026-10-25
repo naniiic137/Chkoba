@@ -589,6 +589,8 @@ const app = {
     this.snap = s;
     this.myPlayerId = s.you;
     this.isHost = s.owner === s.you;
+    // the menu goes with host control: someone who is no longer the host loses it
+    if (this.debugEnabled && !this.mayDebug()) this.toggleDebug();
     this.playerCount = s.opts.players;
     this.forceCapture = s.opts.forceCapture;
     this.captureAssist = s.opts.captureAssist;
