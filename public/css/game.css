@@ -479,6 +479,12 @@ html.reduce .fx-slam .word span { animation: none; }
 .bot-rate { --fill: 0; display: flex; flex-direction: column; gap: 0; padding: 5px 12px 3px; border-radius: var(--radius-sm);
   background: rgba(0,0,0,.32); border: 2px solid color-mix(in srgb, var(--gold) 45%, var(--panel-rim)); font-size: 14px; transition: border-color .2s; }
 .bot-rate.is-off { border-color: var(--panel-rim); }
+.bot-level { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 0 6px; margin-bottom: 4px; border-bottom: 1px solid var(--panel-rim); }
+.bot-level-label { color: var(--text-dim); font-family: var(--font-display); font-size: 12px; letter-spacing: .12em; text-transform: var(--ui-case); }
+.bot-level-seg { padding: 3px; }
+.bot-level-seg button { padding: 5px 10px; font-size: 12px; }
+.bot-level-seg[aria-disabled="true"] { opacity: .45; }
+.bot-level-seg[aria-disabled="true"] button { cursor: default; }
 .bot-rate-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 22px; }
 .bot-rate label { color: var(--text-dim); font-family: var(--font-display); font-size: 12px; letter-spacing: .12em; text-transform: var(--ui-case); }
 .bot-rate label .term { display: inline-flex; flex-direction: row; align-items: baseline; gap: 8px; line-height: 1.3; }

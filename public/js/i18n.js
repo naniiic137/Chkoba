@@ -30,6 +30,10 @@
     paused:  { ar: 'توقّف',         latin: 'PAUSED',   en: 'Paused' },
     winRate: { ar: 'نسبة ربح البوت', latin: 'BOT WIN RATE', en: 'Bot win rate' },
     off:     { ar: 'مطفأ',          latin: 'OFF',      en: 'Off' },
+    botLevel:{ ar: 'مستوى البوت',   latin: 'BOT LEVEL', en: 'Bot level' },
+    easy:    { ar: 'سهل',           latin: 'EASY',     en: 'Easy' },
+    medium:  { ar: 'متوسّط',        latin: 'MEDIUM',   en: 'Medium' },
+    hard:    { ar: 'صعب',           latin: 'HARD',     en: 'Hard' },
   };
 
   // Rule copy for the info panel and the rules carousel. Kept in one place so the

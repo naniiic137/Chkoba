@@ -35,6 +35,10 @@
         <input type="text" id="menu-name" class="input" placeholder="Your name" aria-label="Your name (optional against the bot)" maxlength="20" autocomplete="nickname">
         <button class="pill big gold" id="m-bot">Play vs bot</button>
         <div class="bot-rate is-off" id="m-rate-box">
+          <div class="bot-level">
+            <span id="m-level-label" class="bot-level-label">Bot level</span>
+            <div class="seg bot-level-seg" id="m-level" role="group" aria-labelledby="m-level-label"><button data-v="easy">Easy</button><button data-v="medium">Medium</button><button data-v="hard">Hard</button></div>
+          </div>
           <div class="bot-rate-head">
             <label for="m-rate" id="m-rate-label">Bot win rate</label>
             <span id="m-rate-val" class="bot-rate-val off">Off</span>

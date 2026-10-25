@@ -199,6 +199,8 @@ const app = {
       this._saveOpts();
       this.renderMenuRate();
     });
+    // the bot's level, next to the win rate (the same setting as Options > Bot)
+    this.bindSeg($('m-level'), () => this.opts.bot, (v) => { this.opts.bot = v; this._saveOpts(); this.renderOptions(); });
     this.renderMenuRate();
     $('left-wait').addEventListener('click', () => this.waitForPlayer());
     $('left-claim').addEventListener('click', (e) => this.awayDecision('end', e.currentTarget));
@@ -223,7 +225,7 @@ const app = {
     this.bindSeg($('o-players'), () => this.opts.players, (v) => { this.opts.players = v; this._saveOpts(); });
     this.bindSeg($('o-win'), () => this.opts.winScore, (v) => { this.opts.winScore = v; this._saveOpts(); });
     this.bindSeg($('o-timer'), () => this.opts.timer, (v) => { this.opts.timer = v; this._saveOpts(); });
-    this.bindSeg($('o-bot'), () => this.opts.bot, (v) => { this.opts.bot = v; this._saveOpts(); });
+    this.bindSeg($('o-bot'), () => this.opts.bot, (v) => { this.opts.bot = v; this._saveOpts(); this.renderMenuRate(); });
     this.bindSeg($('o-speed'), () => this.opts.speed, (v) => { this.opts.speed = v; this._saveOpts(); });
     this.bindSeg($('o-force'), () => this.opts.forceCapture, (v) => { this.opts.forceCapture = v; this._saveOpts(); });
     this.bindSeg($('o-assist'), () => this.opts.captureAssist, (v) => { this.opts.captureAssist = v; this._saveOpts(); });
@@ -304,6 +306,13 @@ const app = {
     box.style.setProperty('--fill', on ? ((v + 5) / 105).toFixed(4) : 0);
     box.classList.toggle('is-off', !on);
     document.getElementById('m-rate-off').textContent = I18N.text('off');
+    // the level: same labels as the rest of the menu; with a win rate on, the rate decides how the bot plays
+    document.getElementById('m-level-label').textContent = I18N.text('botLevel');
+    const lv = document.getElementById('m-level');
+    lv.querySelectorAll('button').forEach((b) => { b.textContent = I18N.text(b.dataset.v); });
+    lv.setAttribute('aria-disabled', on ? 'true' : 'false');
+    lv.title = on ? 'The win rate decides how the bot plays' : '';
+    if (lv._sync) lv._sync();
   },
 
   renderMenuCards() {

@@ -35,6 +35,8 @@
 
     // debug() toggles the panel.
     toggleDebug() {
+      // phones don't get the debug menu (it covered the hand); a computer only
+      if (!this.debugEnabled && this.isPhone()) { this.log('info', 'debug menu: computers only'); return 'the debug menu is for computers only'; }
       this.debugEnabled = !this.debugEnabled;
       this._debugMinimized = false;
       this.log('info', 'debug mode', this.debugEnabled ? 'ON (verbose logging enabled)' : 'OFF');
@@ -49,6 +51,12 @@
         if (!this._dbg() && (this._isBotGame || this.isHost)) this.debugUnlock(true);
       }
       return this.debugEnabled ? 'debug panel open' : 'debug panel closed';
+    },
+
+    // A phone: a touch screen whose short side is phone-sized (tablets and computers keep the menu).
+    isPhone() {
+      const touch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      return !!touch && Math.min(screen.width, screen.height) <= 600;
     },
 
     // Makes this connection a debug connection (the room allows the host only).
